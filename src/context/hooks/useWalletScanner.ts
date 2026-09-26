@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { rustScan } from '../../lib/scan';
-import { getAllWallets } from '../../lib/db';
-import { walletHasScanTarget } from '../../lib/wallet';
-import { logActivity } from '../../lib/activity';
-import type { ScanProgress, ToastType, WalletView } from '../../lib/types';
+import { rustScan } from '../../lib/services/scan';
+import { getAllWallets } from '../../lib/db/db';
+import { walletHasScanTarget } from '../../lib/wallets/wallet';
+import { logActivity } from '../../lib/services/activity';
+import type { ScanProgress, WalletView } from '../../lib/types/index';
+import type { ToastType } from '../types/toast';
 
 interface UseWalletScannerProps {
   toast: (text: string, type?: ToastType) => void;

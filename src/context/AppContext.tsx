@@ -1,8 +1,9 @@
 import { createContext, useContext, useEffect, useRef, useCallback, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { ScanProgress, ToastMessage, ToastType, WalletView } from "../lib/types";
-import { hasFundsForWallet, totalBalanceForWallet } from "../lib/chains";
-import { clearSweptBalanceDb } from "../lib/db";
+import type { ScanProgress, WalletView } from "../lib/types/index";
+import type { ToastMessage, ToastType } from "./types/toast";
+import { hasFundsForWallet, totalBalanceForWallet } from "../lib/chains/chains";
+import { clearSweptBalanceDb } from "../lib/db/db";
 import { solanaWs } from "../services/solanaWsService";
 import { useToastState } from "./hooks/useToastState";
 import { useWalletFilters } from "./hooks/useWalletFilters";

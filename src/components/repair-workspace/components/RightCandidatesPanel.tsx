@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { IconSearch } from "../../../icons";
 import { useApp } from "../../../context/AppContext";
-import { logActivity } from "../../../lib/activity";
+import { logActivity } from "../../../lib/services/activity";
 import type { MnemonicRepairResult, SlotCandidateWord, ParsedSolution } from "../types";
 
 interface RightCandidatesPanelProps {

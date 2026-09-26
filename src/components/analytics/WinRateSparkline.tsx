@@ -1,12 +1,12 @@
 import { useState, useEffect, useMemo } from "react";
-import { getActivities, subscribeActivities, type ActivityRecord } from "../../lib/activity";
-import { calculateWinRateTrend, type WinRateTrendPoint } from "../../lib/winrateAnalytics";
+import { getActivities, subscribeActivities, type ActivityRecord } from "../../lib/services/activity";
+import { calculateWinRateTrend, type WinRateTrendPoint } from "../../lib/services/winrateAnalytics";
 import {
   getTradePositions,
   subscribeTradePositions,
   type TokenTradePosition,
 } from "../../services/tokenTradeHistoryService";
-import type { WalletView } from "../../lib/types";
+import type { WalletView } from "../../lib/types/index";
 
 interface WinRateSparklineProps {
   activeWallets?: WalletView[];

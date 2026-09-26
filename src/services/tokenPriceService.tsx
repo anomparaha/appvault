@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { balanceAmount } from "../lib/chains";
+import { balanceAmount } from "../lib/chains/chains";
 
 export interface TokenPriceQuote {
   usd: number;

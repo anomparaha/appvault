@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import type { WalletView } from "../lib/types";
+import type { WalletView } from "../lib/types/index";
 
 export interface OfficialTokenInfo {
   contractAddress: string;

@@ -1,13 +1,13 @@
 import { memo, useCallback, useMemo, useState } from "react";
 import { useApp } from "../../context/AppContext";
-import { shortAddr } from "../../lib/wallet";
+import { shortAddr } from "../../lib/wallets/wallet";
 import {
   formatCompactBalance,
   hasFundsOnEvm,
   hasFundsOnChain,
   balanceAmount,
-} from "../../lib/chains";
-import type { WalletView } from "../../lib/types";
+} from "../../lib/chains/chains";
+import type { WalletView } from "../../lib/types/index";
 import { IconSeed, IconKey } from "../../icons";
 import { ChainIcon } from "../../icons/ChainIcon";
 import { TokenIcon } from "../../icons/TokenIcon";

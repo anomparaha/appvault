@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from "react";
-import { getActivities, subscribeActivities, type ActivityRecord } from "../../lib/activity";
-import { calculateWinRate, type Timeframe } from "../../lib/winrateAnalytics";
+import { getActivities, subscribeActivities, type ActivityRecord } from "../../lib/services/activity";
+import { calculateWinRate, type Timeframe } from "../../lib/services/winrateAnalytics";
 import { robinhoodWs } from "../../services/robinhoodWsService";
 import { solanaWs } from "../../services/solanaWsService";
 import { IconTrendingUp } from "../../icons";

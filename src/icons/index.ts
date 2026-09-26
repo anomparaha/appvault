@@ -1,3 +1,4 @@
+// Chain icons
 export * from "./types";
 export * from "./chains/IconEth";
 export * from "./chains/IconBsc";
@@ -5,6 +6,9 @@ export * from "./chains/IconSol";
 export * from "./chains/IconBase";
 export * from "./chains/IconArb";
 export * from "./chains/IconRobinhood";
+export * from "./chains/IconBtc";
+
+// UI icons
 export * from "./ui/IconWallet";
 export * from "./ui/IconShield";
 export * from "./ui/IconSearch";
@@ -22,6 +26,7 @@ export * from "./ui/IconTrade";
 export * from "./ui/IconLock";
 export * from "./ui/IconKey";
 export * from "./ui/IconSeed";
+
+// Composite icon components
 export * from "./ChainIcon";
 export * from "./TokenIcon";
-

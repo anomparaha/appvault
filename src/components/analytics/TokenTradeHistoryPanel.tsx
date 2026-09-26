@@ -12,7 +12,7 @@ import {
 } from "../../services/tokenTradeHistoryService";
 import { TokenIcon } from "../../icons/TokenIcon";
 import { IconTrash } from "../../icons";
-import type { WalletView } from "../../lib/types";
+import type { WalletView } from "../../lib/types/index";
 
 interface TokenTradeHistoryPanelProps {
   activeWallets?: WalletView[];

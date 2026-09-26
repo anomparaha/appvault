@@ -1,8 +1,8 @@
 import { useState, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useApp } from "../../../context/AppContext";
-import { sound } from "../../../lib/audio";
-import type { FundedWalletData } from "../../FundedWalletModal";
+import { sound } from "../../../lib/utils/audio";
+import type { FundedWalletData } from "../../modals/FundedWalletModal";
 
 export function useOnTheFlyScan() {
   const { toast, isAirGapped, importWallets } = useApp();
