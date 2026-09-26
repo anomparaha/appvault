@@ -361,7 +361,7 @@ fn normalize_token_logo_url(value: &str) -> Option<String> {
 
 fn looks_like_image_url(url: &str) -> bool {
     let path = url
-        .split(|character| character == '?' || character == '#')
+        .split(['?', '#'])
         .next()
         .unwrap_or(url)
         .to_ascii_lowercase();
@@ -583,13 +583,19 @@ async fn resolve_solana_token_metas(
 
     // DexScreener indexes pools from many Solana platforms, so tokens do not need to be tied to
     // any particular launchpad. Bound concurrency to avoid stalling scans of wallets with many mints.
-    let dex_requests = futures::stream::iter(pending.iter().filter(|mint| {
-        !resolved
-            .get(mint.as_str())
-            .map(has_complete_solana_metadata)
-            .unwrap_or(false)
-    }).cloned())
-    .map(|mint| async move {
+    let dex_mints: Vec<String> = pending
+        .iter()
+        .filter(|mint| {
+            !resolved
+                .get(mint.as_str())
+                .map(has_complete_solana_metadata)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .collect();
+
+    let dex_requests = futures::stream::iter(dex_mints)
+        .map(|mint| async move {
         let url = format!("https://api.dexscreener.com/latest/dex/tokens/{mint}");
         let metadata = match client
             .get(url)
@@ -617,13 +623,19 @@ async fn resolve_solana_token_metas(
 
     // The standard parsed RPC response exposes Token-2022 tokenMetadata extensions, which can
     // fill gaps when third-party indexes have not seen a newly-created mint yet.
-    let info_requests = futures::stream::iter(pending.iter().filter(|mint| {
-        resolved
-            .get(mint.as_str())
-            .map(|metadata| metadata.symbol.is_empty() || metadata.name.is_empty())
-            .unwrap_or(true)
-    }).cloned())
-    .map(|mint| async move {
+    let info_mints: Vec<String> = pending
+        .iter()
+        .filter(|mint| {
+            resolved
+                .get(mint.as_str())
+                .map(|metadata| metadata.symbol.is_empty() || metadata.name.is_empty())
+                .unwrap_or(true)
+        })
+        .cloned()
+        .collect();
+
+    let info_requests = futures::stream::iter(info_mints)
+        .map(|mint| async move {
         let payload = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
