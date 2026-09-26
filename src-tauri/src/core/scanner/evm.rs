@@ -317,6 +317,7 @@ async fn resolve_token_metadata(
     resolved
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn scan_evm_for_wallet(
     client: &reqwest::Client,
     address: &str,
@@ -434,13 +435,14 @@ pub async fn scan_evm_for_wallet(
                 }));
                 expected_ids.push(0);
             }
-            for index in token_offset..end {
+            for (sub_idx, token) in token_list[token_offset..end].iter().enumerate() {
+                let index = token_offset + sub_idx;
                 let id = u64::try_from(index + 1).unwrap_or(u64::MAX);
                 calls.push(serde_json::json!({
                     "jsonrpc": "2.0",
                     "id": id,
                     "method": "eth_call",
-                    "params": [{"to": token_list[index].contract, "data": balance_of_data}, "latest"]
+                    "params": [{"to": token.contract, "data": balance_of_data}, "latest"]
                 }));
                 expected_ids.push(id);
             }
