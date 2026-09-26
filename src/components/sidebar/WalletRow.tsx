@@ -1,13 +1,13 @@
 import { memo, useCallback, useMemo, useState } from "react";
 import { useApp } from "../../context/AppContext";
-import { shortAddr } from "../../lib/wallet";
+import { shortAddr } from "../../lib/wallets/wallet";
 import {
   formatCompactBalance,
   hasFundsOnEvm,
   hasFundsOnChain,
   balanceAmount,
-} from "../../lib/chains";
-import type { WalletView } from "../../lib/types";
+} from "../../lib/chains/chains";
+import type { WalletView } from "../../lib/types/index";
 import { IconSeed, IconKey } from "../../icons";
 import { ChainIcon } from "../../icons/ChainIcon";
 import { TokenIcon } from "../../icons/TokenIcon";
@@ -115,6 +115,7 @@ export const WalletRow = memo(function WalletRow({
         symbol: tok.symbol,
         name: tok.name,
         contractAddress: tok.contractAddress,
+        logoUrl: tok.logoUrl,
       };
     });
 
@@ -269,6 +270,7 @@ export const WalletRow = memo(function WalletRow({
                       symbol={(primaryHolding as any).symbol}
                       contractAddress={(primaryHolding as any).contractAddress}
                       name={(primaryHolding as any).name}
+                      logoUrl={(primaryHolding as any).logoUrl}
                       size={13.5}
                       className="card-bal-icon"
                     />
@@ -313,6 +315,7 @@ export const WalletRow = memo(function WalletRow({
                                   symbol={(b as any).symbol}
                                   contractAddress={(b as any).contractAddress}
                                   name={(b as any).name}
+                                  logoUrl={(b as any).logoUrl}
                                   size={13}
                                 />
                                 <span>{b.label}</span>

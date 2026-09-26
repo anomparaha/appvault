@@ -43,30 +43,47 @@ pub fn format_balance_display(wei_hex: &str, symbol: &str) -> (f64, String) {
     (amount, s)
 }
 
+fn format_exact_token_units(value: u128, decimals: u8) -> String {
+    let raw = value.to_string();
+    let scale = usize::from(decimals);
+    if scale == 0 {
+        return raw;
+    }
+
+    let (whole, fraction) = if raw.len() > scale {
+        let split_at = raw.len() - scale;
+        (raw[..split_at].to_string(), raw[split_at..].to_string())
+    } else {
+        (
+            "0".to_string(),
+            format!("{}{}", "0".repeat(scale - raw.len()), raw),
+        )
+    };
+    let fraction = fraction.trim_end_matches('0');
+    if fraction.is_empty() {
+        return whole;
+    }
+
+    const MAX_DISPLAY_DECIMALS: usize = 24;
+    let displayed_fraction = &fraction[..fraction.len().min(MAX_DISPLAY_DECIMALS)];
+    let truncated = fraction.len() > MAX_DISPLAY_DECIMALS;
+    format!("{whole}.{displayed_fraction}{}", if truncated { "…" } else { "" })
+}
+
 pub fn format_token_amount(hex_val: &str, decimals: u8, symbol: &str) -> Option<(f64, String)> {
     let clean = hex_val.trim_start_matches("0x").trim();
     if clean.is_empty() || clean.chars().all(|c| c == '0') {
         return None;
     }
-    let val = u128::from_str_radix(clean, 16).unwrap_or(0);
+    let val = u128::from_str_radix(clean, 16).ok()?;
     if val == 0 {
         return None;
     }
-    let divisor = 10_f64.powi(decimals as i32);
-    let amount = (val as f64) / divisor;
-    if amount <= 0.0 {
+    let amount = (val as f64) / 10_f64.powi(i32::from(decimals));
+    if !amount.is_finite() || amount <= 0.0 {
         return None;
     }
-    let formatted: String = if amount < 0.0001 {
-        format!("{:.8} {}", amount, symbol)
-    } else if amount < 1.0 {
-        format!("{:.6} {}", amount, symbol)
-    } else if amount < 1000.0 {
-        format!("{:.4} {}", amount, symbol)
-    } else {
-        format!("{:.2} {}", amount, symbol)
-    };
-    Some((amount, formatted))
+    Some((amount, format!("{} {}", format_exact_token_units(val, decimals), symbol)))
 }
 
 pub async fn rpc_get_balance(address: &str, rpc: &str) -> Result<String, String> {

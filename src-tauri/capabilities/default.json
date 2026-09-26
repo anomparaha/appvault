@@ -12,6 +12,7 @@
     "fs:allow-write-text-file",
     "allow-scan-balances",
     "allow-fee-estimate",
+    "allow-chain-history",
     "allow-tx-broadcast",
     "allow-native-signing",
     "allow-directory-scan",

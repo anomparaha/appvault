@@ -14,6 +14,11 @@ commands.allow = [
 ]
 
 [[permission]]
+identifier = "allow-chain-history"
+description = "Allow reading recent confirmed Solana transaction history"
+commands.allow = ["get_solana_transaction_history"]
+
+[[permission]]
 identifier = "allow-tx-broadcast"
 description = "Allow broadcasting signed raw transactions"
 commands.allow = ["broadcast_raw_tx", "broadcast_solana_tx"]

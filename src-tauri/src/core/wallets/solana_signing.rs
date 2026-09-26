@@ -40,7 +40,7 @@ pub fn find_program_address(seeds: &[&[u8]], program_id: &[u8; 32]) -> Result<([
         for seed in seeds {
             hasher.update(seed);
         }
-        hasher.update(&[nonce]);
+        hasher.update([nonce]);
         hasher.update(program_id);
         hasher.update(b"ProgramDerivedAddress");
         let hash: [u8; 32] = hasher.finalize().into();

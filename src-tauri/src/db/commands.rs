@@ -30,6 +30,8 @@ pub struct WalletTokenDto {
     pub balance: String,
     pub raw_balance: Option<String>,
     pub contract_address: Option<String>,
+    pub decimals: Option<u8>,
+    pub logo_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +111,8 @@ pub fn ensure_schema(conn: &rusqlite::Connection) -> Result<(), String> {
             balance TEXT NOT NULL,
             raw_balance TEXT,
             contract_address TEXT,
+            decimals INTEGER,
+            logo_url TEXT,
             updated_at TEXT,
             PRIMARY KEY (wallet_id, chain, token_symbol, contract_address),
             FOREIGN KEY (wallet_id) REFERENCES wallets(id) ON DELETE CASCADE
@@ -121,6 +125,14 @@ pub fn ensure_schema(conn: &rusqlite::Connection) -> Result<(), String> {
 
     let _ = conn.execute("ALTER TABLE wallets ADD COLUMN sol_address TEXT", []);
     let _ = conn.execute("ALTER TABLE wallets ADD COLUMN btc_address TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE token_balances ADD COLUMN decimals INTEGER",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE token_balances ADD COLUMN logo_url TEXT",
+        [],
+    );
 
     let _ = conn.execute(
         "UPDATE token_balances 
@@ -341,7 +353,7 @@ pub fn db_get_all_wallets(conn: &rusqlite::Connection) -> Result<Vec<WalletRecor
     // Load tokens
     let mut tok_stmt = conn
         .prepare(
-            "SELECT wallet_id, chain, token_symbol, token_name, balance, raw_balance, contract_address
+            "SELECT wallet_id, chain, token_symbol, token_name, balance, raw_balance, contract_address, decimals, logo_url
              FROM token_balances",
         )
         .map_err(|e| e.to_string())?;
@@ -358,6 +370,9 @@ pub fn db_get_all_wallets(conn: &rusqlite::Connection) -> Result<Vec<WalletRecor
             let balance: String = row.get(4)?;
             let raw_balance: Option<String> = row.get(5)?;
             let contract_address: Option<String> = row.get(6)?;
+            let decimals_raw: Option<i64> = row.get(7)?;
+            let decimals = decimals_raw.and_then(|value| u8::try_from(value).ok());
+            let logo_url: Option<String> = row.get(8)?;
             let name = token_name.unwrap_or_else(|| token_symbol.clone());
             Ok((
                 wid,
@@ -369,6 +384,8 @@ pub fn db_get_all_wallets(conn: &rusqlite::Connection) -> Result<Vec<WalletRecor
                     balance,
                     raw_balance,
                     contract_address,
+                    decimals,
+                    logo_url,
                 },
             ))
         })
@@ -1206,10 +1223,10 @@ mod tests {
 
     #[test]
     fn test_native_verify_master_password_flow() {
-        let mut conn = setup_in_memory_db();
+        let conn = setup_in_memory_db();
         let pw = "SecurePassword789!";
         let token = crate::core::security::crypto::create_verification_token(pw).unwrap();
-        db_save_master_password(&mut conn, &token).unwrap();
+        db_save_master_password(&conn, &token).unwrap();
 
         // Stored token matches password
         let stored_token = db_get_verification_token(&conn).unwrap().unwrap();
@@ -1219,10 +1236,10 @@ mod tests {
 
     #[test]
     fn test_verify_master_password_internal_and_delete_protection() {
-        let mut conn = setup_in_memory_db();
+        let conn = setup_in_memory_db();
         let pw = "SuperSecretVaultPw2026!";
         let token = crate::core::security::crypto::create_verification_token(pw).unwrap();
-        db_save_master_password(&mut conn, &token).unwrap();
+        db_save_master_password(&conn, &token).unwrap();
 
         // Valid password succeeds
         assert!(verify_master_password_internal(&conn, pw).is_ok());

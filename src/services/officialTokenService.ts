@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import type { WalletView } from "../lib/types";
+import type { WalletView } from "../lib/types/index";
 
 export interface OfficialTokenInfo {
   contractAddress: string;
@@ -221,7 +221,7 @@ export async function fetchOfficialTokenData(customEndpoint?: string): Promise<O
 /**
  * React hook to consume official token data and vault holdings reactively.
  */
-export function useOfficialToken(wallets: WalletView[] = []) {
+export function useOfficialToken(wallets: WalletView[] = [], enabled = false) {
   const [tokenInfo, setTokenInfo] = useState<OfficialTokenInfo>(OFFICIAL_TOKEN_SPEC);
   const [loading, setLoading] = useState(false);
 
@@ -230,6 +230,7 @@ export function useOfficialToken(wallets: WalletView[] = []) {
   }, [wallets]);
 
   const refresh = useCallback(async () => {
+    if (!enabled) return;
     setLoading(true);
     try {
       const data = await fetchOfficialTokenData();
@@ -239,11 +240,15 @@ export function useOfficialToken(wallets: WalletView[] = []) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [enabled]);
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    if (enabled) {
+      void refresh();
+    } else {
+      setLoading(false);
+    }
+  }, [enabled, refresh]);
 
   return {
     token: tokenInfo,

@@ -6,12 +6,12 @@ import {
   saveMasterPassword,
   hasPin as checkDbHasPin,
   resetEntireVault,
-} from '../../lib/db';
+} from '../../lib/db/db';
 import {
   createVerificationToken,
-} from '../../lib/crypto';
-import { logActivity } from '../../lib/activity';
-import type { ToastType } from '../../lib/types';
+} from '../../lib/crypto/crypto';
+import { logActivity } from '../../lib/services/activity';
+import type { ToastType } from '../types/toast';
 
 export type Screen = 'loading' | 'setup' | 'unlock' | 'app' | 'error';
 

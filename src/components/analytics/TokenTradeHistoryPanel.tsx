@@ -11,8 +11,9 @@ import {
   type TokenTradePosition,
 } from "../../services/tokenTradeHistoryService";
 import { TokenIcon } from "../../icons/TokenIcon";
+import { useApp } from "../../context/AppContext";
 import { IconTrash } from "../../icons";
-import type { WalletView } from "../../lib/types";
+import type { WalletView } from "../../lib/types/index";
 
 interface TokenTradeHistoryPanelProps {
   activeWallets?: WalletView[];
@@ -21,27 +22,28 @@ interface TokenTradeHistoryPanelProps {
 
 export function TokenTradeHistoryPanel({
   activeWallets,
-  ethUsdPrice = 2680,
+  ethUsdPrice = 0,
 }: TokenTradeHistoryPanelProps) {
+  const { isAirGapped, sessionToken, toast, wallets } = useApp();
   const [positions, setPositions] = useState<TokenTradePosition[]>(() => getTradePositions());
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
 
   // Form State for Add Trade Modal
-  const [formSymbol, setFormSymbol] = useState("SMA");
-  const [formName, setFormName] = useState("Summa");
+  const [formSymbol, setFormSymbol] = useState("");
+  const [formName, setFormName] = useState("");
   const [formChain, setFormChain] = useState("robinhood");
-  const [formContract, setFormContract] = useState("0x3bd9136d51af679bd1b11d06b951155543c5449f");
-  const [formHoldAmount, setFormHoldAmount] = useState("2352941");
-  const [formEntryTime, setFormEntryTime] = useState("2026-09-24 10:15");
-  const [formEntryMc, setFormEntryMc] = useState("69320");
-  const [formEntryPriceUsd, setFormEntryPriceUsd] = useState("0.0000085");
-  const [formEntryTotalEth, setFormEntryTotalEth] = useState("0.001");
+  const [formContract, setFormContract] = useState("");
+  const [formHoldAmount, setFormHoldAmount] = useState("");
+  const [formEntryTime, setFormEntryTime] = useState("");
+  const [formEntryMc, setFormEntryMc] = useState("");
+  const [formEntryPriceUsd, setFormEntryPriceUsd] = useState("");
+  const [formEntryTotalEth, setFormEntryTotalEth] = useState("");
 
-  const [formIsExited, setFormIsExited] = useState(true);
-  const [formExitTime, setFormExitTime] = useState("2026-09-26 14:30");
-  const [formExitMc, setFormExitMc] = useState("29750");
-  const [formExitPriceUsd, setFormExitPriceUsd] = useState("0.00000456");
-  const [formExitTotalEth, setFormExitTotalEth] = useState("0.00069");
+  const [formIsExited, setFormIsExited] = useState(false);
+  const [formExitTime, setFormExitTime] = useState("");
+  const [formExitMc, setFormExitMc] = useState("");
+  const [formExitPriceUsd, setFormExitPriceUsd] = useState("");
+  const [formExitTotalEth, setFormExitTotalEth] = useState("");
 
   // Inline Quick Edit for Buy Price
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -60,11 +62,25 @@ export function TokenTradeHistoryPanel({
     if (activeWallets.length === 0) return [];
     const activeIds = new Set(activeWallets.map((w) => w.id));
 
-    return positions.filter((p) => {
-      if (!p.walletId) return true;
-      return activeIds.has(p.walletId);
-    });
+    return positions.filter((position) =>
+      position.walletId !== undefined && activeIds.has(position.walletId),
+    );
   }, [positions, activeWallets]);
+
+  const tokenLogos = useMemo(() => {
+    const logos = new Map<string, string>();
+    for (const wallet of activeWallets ?? wallets) {
+      for (const token of wallet.tokens ?? []) {
+        if (!token.logoUrl) continue;
+        const chain = token.chain.toLowerCase();
+        if (token.contractAddress) {
+          logos.set(`${chain}_${token.contractAddress.toLowerCase()}`, token.logoUrl);
+        }
+        logos.set(`${chain}_${token.symbol.toLowerCase()}`, token.logoUrl);
+      }
+    }
+    return logos;
+  }, [activeWallets, wallets]);
 
   // Aggregate stats
   const stats = useMemo(() => {
@@ -103,11 +119,17 @@ export function TokenTradeHistoryPanel({
     const exitTotalEthNum = parseFloat(formExitTotalEth) || 0;
     const exitTotalUsdNum = exitTotalEthNum * ethUsdPrice;
 
-    const activeId = activeWallets && activeWallets.length === 1 ? activeWallets[0].id : 3;
+    if (!formSymbol.trim() || holdAmountNum <= 0 || entryPriceUsdNum <= 0 || entryTotalEthNum <= 0 ||
+      (formIsExited && (exitPriceUsdNum <= 0 || exitTotalEthNum <= 0))) {
+      toast("Isi simbol, jumlah token, harga masuk, dan total transaksi yang valid.", "error");
+      return;
+    }
+    if (activeWallets && activeWallets.length !== 1) return;
+    const activeId = activeWallets?.[0]?.id;
 
     addTradePosition({
       walletId: activeId,
-      walletLabel: `Wallet #${activeId}`,
+      walletLabel: activeId === undefined ? undefined : `Wallet #${activeId}`,
       chain: formChain,
       symbol: formSymbol.trim().toUpperCase(),
       name: formName.trim() || formSymbol.trim().toUpperCase(),
@@ -133,7 +155,7 @@ export function TokenTradeHistoryPanel({
 
       status: formIsExited ? "sold" : exitPriceUsdNum < entryPriceUsdNum ? "drawdown" : "profit",
       buyDate: formEntryTime.slice(0, 10),
-    });
+    }, { livePriceEnabled: Boolean(sessionToken) && !isAirGapped, ethUsdPrice });
 
     setIsAddModalOpen(false);
   };
@@ -199,6 +221,10 @@ export function TokenTradeHistoryPanel({
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <button
             type="button"
+            disabled={activeWallets !== undefined && activeWallets.length !== 1}
+            title={activeWallets !== undefined && activeWallets.length !== 1
+              ? "Pilih tepat satu wallet agar trade tercatat pada wallet yang benar."
+              : undefined}
             onClick={() => setIsAddModalOpen(true)}
             style={{
               background: "rgba(56, 189, 248, 0.15)",
@@ -208,7 +234,8 @@ export function TokenTradeHistoryPanel({
               padding: "5px 10px",
               fontSize: "11px",
               fontWeight: 650,
-              cursor: "pointer",
+              cursor: activeWallets !== undefined && activeWallets.length !== 1 ? "not-allowed" : "pointer",
+              opacity: activeWallets !== undefined && activeWallets.length !== 1 ? 0.5 : 1,
             }}
           >
             + Catat Trade
@@ -310,6 +337,10 @@ export function TokenTradeHistoryPanel({
           filteredPositions.map((pos) => {
           const isLoss = pos.pnlEth < 0;
           const isEditing = editingId === pos.id;
+          const logoUrl = pos.contractAddress
+            ? tokenLogos.get(`${pos.chain.toLowerCase()}_${pos.contractAddress.toLowerCase()}`)
+              ?? tokenLogos.get(`${pos.chain.toLowerCase()}_${pos.symbol.toLowerCase()}`)
+            : tokenLogos.get(`${pos.chain.toLowerCase()}_${pos.symbol.toLowerCase()}`);
 
           // Rasio sisa nilai ETH terhadap modal masuk ETH
           const ratioPercent =
@@ -338,6 +369,7 @@ export function TokenTradeHistoryPanel({
                     contractAddress={pos.contractAddress}
                     symbol={pos.symbol}
                     name={pos.name}
+                    logoUrl={logoUrl}
                     size={24}
                   />
                   <span style={{ fontWeight: 800, fontSize: "16px", color: "#FFFFFF" }}>{pos.symbol}</span>
@@ -702,7 +734,7 @@ export function TokenTradeHistoryPanel({
                     type="text"
                     value={formHoldAmount}
                     onChange={(e) => setFormHoldAmount(e.target.value)}
-                    placeholder="2352941"
+                    placeholder="Token amount"
                     style={{ width: "100%", padding: "6px", background: "var(--surface-2)", color: "#fff", border: "1px solid var(--border)", borderRadius: "4px" }}
                   />
                 </div>
@@ -739,7 +771,7 @@ export function TokenTradeHistoryPanel({
                       step="any"
                       value={formEntryMc}
                       onChange={(e) => setFormEntryMc(e.target.value)}
-                      placeholder="69320"
+                      placeholder="Entry market cap (optional)"
                       style={{ width: "100%", padding: "4px", background: "var(--surface)", color: "#fff", border: "1px solid var(--border)", borderRadius: "4px" }}
                     />
                   </div>
@@ -749,7 +781,7 @@ export function TokenTradeHistoryPanel({
                       type="text"
                       value={formEntryPriceUsd}
                       onChange={(e) => setFormEntryPriceUsd(e.target.value)}
-                      placeholder="0.0000085"
+                      placeholder="Entry price in USD"
                       style={{ width: "100%", padding: "4px", background: "var(--surface)", color: "#fff", border: "1px solid var(--border)", borderRadius: "4px" }}
                     />
                   </div>
@@ -761,7 +793,7 @@ export function TokenTradeHistoryPanel({
                       type="text"
                       value={formEntryTotalEth}
                       onChange={(e) => setFormEntryTotalEth(e.target.value)}
-                      placeholder="0.001"
+                      placeholder="Total invested in native coin"
                       style={{ width: "100%", padding: "4px", background: "var(--surface)", color: "#fff", border: "1px solid var(--border)", borderRadius: "4px" }}
                     />
                   </div>
@@ -800,7 +832,7 @@ export function TokenTradeHistoryPanel({
                         step="any"
                         value={formExitMc}
                         onChange={(e) => setFormExitMc(e.target.value)}
-                        placeholder="29750"
+                        placeholder="Exit market cap (optional)"
                         style={{ width: "100%", padding: "4px", background: "var(--surface)", color: "#fff", border: "1px solid var(--border)", borderRadius: "4px" }}
                       />
                     </div>
@@ -810,7 +842,7 @@ export function TokenTradeHistoryPanel({
                         type="text"
                         value={formExitPriceUsd}
                         onChange={(e) => setFormExitPriceUsd(e.target.value)}
-                        placeholder="0.00000456"
+                        placeholder="Exit price in USD"
                         style={{ width: "100%", padding: "4px", background: "var(--surface)", color: "#fff", border: "1px solid var(--border)", borderRadius: "4px" }}
                       />
                     </div>
@@ -822,7 +854,7 @@ export function TokenTradeHistoryPanel({
                         type="text"
                         value={formExitTotalEth}
                         onChange={(e) => setFormExitTotalEth(e.target.value)}
-                        placeholder="0.00069"
+                        placeholder="Total received in native coin"
                         style={{ width: "100%", padding: "4px", background: "var(--surface)", color: "#fff", border: "1px solid var(--border)", borderRadius: "4px" }}
                       />
                     </div>

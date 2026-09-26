@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useApp } from "../../context/AppContext";
-import { FundedWalletModal } from "../FundedWalletModal";
+import { FundedWalletModal } from "../modals/FundedWalletModal";
 import { IconArrowLeft } from "../../icons";
 import { useMnemonicAnalysis } from "./hooks/useMnemonicAnalysis";
 import { useOnTheFlyScan } from "./hooks/useOnTheFlyScan";

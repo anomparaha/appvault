@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useState } from 'react';
-import type { WalletView } from '../../lib/types';
-import { hasFundsForWallet, hasFundsOnEvm, hasFundsOnSol } from '../../lib/chains';
+import type { WalletView } from '../../lib/types/index';
+import { hasFundsForWallet, hasFundsOnEvm, hasFundsOnSol } from '../../lib/chains/chains';
 
 export function useWalletFilters(wallets: WalletView[]) {
   const [selectedId, setSelectedId] = useState<number | null>(null);

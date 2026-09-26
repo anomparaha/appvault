@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { rustScan } from '../../lib/scan';
-import { getAllWallets } from '../../lib/db';
-import { walletHasScanTarget } from '../../lib/wallet';
-import { logActivity } from '../../lib/activity';
-import type { ScanProgress, ToastType, WalletView } from '../../lib/types';
+import { rustScan } from '../../lib/services/scan';
+import { getAllWallets } from '../../lib/db/db';
+import { walletHasScanTarget } from '../../lib/wallets/wallet';
+import { logActivity } from '../../lib/services/activity';
+import type { ScanProgress, WalletView } from '../../lib/types/index';
+import type { ToastType } from '../types/toast';
 
 interface UseWalletScannerProps {
   toast: (text: string, type?: ToastType) => void;
@@ -12,6 +13,17 @@ interface UseWalletScannerProps {
   loadWallets: () => Promise<WalletView[]>;
   setLoadingBalances: (ids: number[]) => void;
   enrich: (records: any[]) => WalletView[];
+}
+
+const SCAN_CHUNK_SIZE = 15;
+type ScanResult = { funded: number; errors: number };
+
+function chunksOf<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
 }
 
 export function useWalletScanner({
@@ -24,6 +36,7 @@ export function useWalletScanner({
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
   const scanCancelledRef = useRef(false);
+  const scanInProgressRef = useRef(false);
 
   const [isAirGapped, setIsAirGapped] = useState<boolean>(() => {
     const saved = localStorage.getItem('plurivex_air_gapped');
@@ -34,9 +47,7 @@ export function useWalletScanner({
     const saved = localStorage.getItem('plurivex_air_gapped');
     const initialVal = saved !== null ? saved === 'true' : true;
     invoke<boolean>('set_air_gapped_mode', { enabled: initialVal })
-      .then((val) => {
-        setIsAirGapped(val);
-      })
+      .then((val) => setIsAirGapped(val))
       .catch(() => {
         invoke<boolean>('get_air_gapped_mode')
           .then((val) => setIsAirGapped(val))
@@ -79,8 +90,18 @@ export function useWalletScanner({
   }, [toast]);
 
   const scanWallets = useCallback(
-    async (targets: WalletView[]) => {
+    async (targets: WalletView[], chainKey?: string): Promise<ScanResult> => {
       if (!targets.length) return { funded: 0, errors: 0 };
+      if (!sessionToken) {
+        toast("Authentication required: Vault session is locked.", "error");
+        return { funded: 0, errors: 1 };
+      }
+      if (scanInProgressRef.current) {
+        toast('A balance sync is already running. Please try again shortly.', 'info');
+        return { funded: 0, errors: 1 };
+      }
+
+      scanInProgressRef.current = true;
       scanCancelledRef.current = false;
       setScanning(true);
 
@@ -88,50 +109,26 @@ export function useWalletScanner({
       let completed = 0;
       let totalFunded = 0;
       let totalErrors = 0;
+      setScanProgress({ total, completed: 0, funded: 0, isScanning: true });
 
-      setScanProgress({
-        total,
-        completed: 0,
-        funded: 0,
-        isScanning: true,
-      });
+      try {
+        for (const chunk of chunksOf(targets, SCAN_CHUNK_SIZE)) {
+          if (scanCancelledRef.current) break;
+          const chunkIds = chunk.map((wallet) => wallet.id);
+          setLoadingBalances(chunkIds);
 
-      // Single wallet fast path
-      if (targets.length === 1) {
-        setLoadingBalances([targets[0].id]);
-        try {
-          const summary = await rustScan(targets[0].id);
-          await loadWallets();
-          setScanning(false);
-          setScanProgress(null);
-          return { funded: summary.funded, errors: summary.errors };
-        } catch (err) {
-          setScanning(false);
-          setScanProgress(null);
-          throw err;
-        }
-      }
-
-      // Chunked background scanning (batches of 15 wallets at a time)
-      const CHUNK_SIZE = 15;
-      const chunks: WalletView[][] = [];
-      for (let i = 0; i < targets.length; i += CHUNK_SIZE) {
-        chunks.push(targets.slice(i, i + CHUNK_SIZE));
-      }
-
-      for (const chunk of chunks) {
-        if (scanCancelledRef.current) break;
-
-        const chunkIds = chunk.map((w) => w.id);
-        setLoadingBalances(chunkIds);
-
-        try {
-          const summary = await rustScan(undefined, chunkIds);
-          completed += chunk.length;
-          totalFunded += summary.funded;
-          totalErrors += summary.errors;
-
-          await loadWallets();
+          try {
+            const summary = chunk.length === 1
+              ? await rustScan(sessionToken, chunk[0].id, undefined, chainKey)
+              : await rustScan(sessionToken, undefined, chunkIds, chainKey);
+            completed += chunk.length;
+            totalFunded += summary.funded;
+            totalErrors += summary.errors;
+            await loadWallets();
+          } catch (err) {
+            console.error('Balance scan chunk failed:', err);
+            totalErrors += 1;
+          }
 
           setScanProgress({
             total,
@@ -139,20 +136,58 @@ export function useWalletScanner({
             funded: totalFunded,
             isScanning: true,
           });
-        } catch (err) {
-          console.error('Chunk scan error:', err);
-          totalErrors += 1;
         }
+      } finally {
+        scanInProgressRef.current = false;
+        setScanning(false);
+        setScanProgress(null);
       }
 
-      setScanning(false);
-      setScanProgress(null);
       return { funded: totalFunded, errors: totalErrors };
     },
-    [loadWallets, setLoadingBalances]
+    [loadWallets, setLoadingBalances, toast, sessionToken]
+  );
+
+  /**
+   * Quiet, serialized background synchronization used by WSS events and the
+   * periodic recovery poll. It persists RPC results to SQLite then reloads the
+   * wallet state, but does not show a manual-scan spinner or toast on every tick.
+   */
+  const refreshWallets = useCallback(
+    async (targets: WalletView[], chainKey?: string): Promise<void> => {
+      if (!targets.length || isAirGapped || !sessionToken || scanInProgressRef.current) return;
+      scanInProgressRef.current = true;
+      let shouldReload = false;
+
+      try {
+        for (const chunk of chunksOf(targets, SCAN_CHUNK_SIZE)) {
+          const ids = chunk.map((wallet) => wallet.id);
+          try {
+            const summary = chunk.length === 1
+              ? await rustScan(sessionToken, chunk[0].id, undefined, chainKey)
+              : await rustScan(sessionToken, undefined, ids, chainKey);
+            shouldReload = shouldReload || summary.scanned > 0;
+            if (summary.errors > 0) {
+              console.warn(`[Live wallet sync] ${summary.errors} RPC checks failed`, { chainKey, ids });
+            }
+          } catch (err) {
+            console.warn('[Live wallet sync] RPC scan failed:', err);
+          }
+        }
+
+        if (shouldReload) await loadWallets();
+      } finally {
+        scanInProgressRef.current = false;
+      }
+    },
+    [isAirGapped, sessionToken, loadWallets]
   );
 
   const scanAll = async () => {
+    if (!sessionToken) {
+      toast("Authentication required: Vault session is locked.", "error");
+      return;
+    }
     if (isAirGapped) {
       toast(
         '🛡️ Air-Gapped Safe Mode Active: Network scanning is blocked for security. Disable Safe Mode in the header if you want to scan on-chain balances.',
@@ -170,7 +205,7 @@ export function useWalletScanner({
       desc: `Scanned ${targets.length} wallets across all networks · ${funded} funded addresses found`,
       amount: `${funded} Funded`,
       amountColor: funded > 0 ? "var(--ok)" : "var(--text-dim)",
-      status: "success",
+      status: errors > 0 ? "warning" : "success",
       metadata: { totalScanned: targets.length, funded, errors },
     });
     if (errors > 0) {
@@ -196,22 +231,14 @@ export function useWalletScanner({
       return;
     }
     const records = await getAllWallets(sessionToken);
-    const w = enrich(records).find((x) => x.id === id);
-    if (!w || !walletHasScanTarget(w)) return;
-    setScanning(true);
-    setLoadingBalances([id]);
-    try {
-      const summary = await rustScan(id);
-      await loadWallets();
-      if (summary.errors > 0) {
-        toast(`${summary.errors} chains failed to scan — please retry`, "error");
-      } else {
-        toast("Wallet balances updated successfully", "success");
-      }
-    } catch (err) {
-      toast(`Scan failed: ${String(err)}`, "error");
-    } finally {
-      setScanning(false);
+    const wallet = enrich(records).find((candidate) => candidate.id === id);
+    if (!wallet || !walletHasScanTarget(wallet)) return;
+
+    const summary = await scanWallets([wallet]);
+    if (summary.errors > 0) {
+      toast(`${summary.errors} chains failed to scan — please retry`, "error");
+    } else {
+      toast("Wallet balances updated successfully", "success");
     }
   };
 
@@ -223,6 +250,7 @@ export function useWalletScanner({
     isAirGapped,
     toggleAirGapped,
     scanWallets,
+    refreshWallets,
     scanAll,
     scanOne,
     stopScan,

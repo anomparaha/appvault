@@ -21,6 +21,16 @@ pub struct DiscoveredToken {
     pub balance: String,
     pub raw_balance: String,
     pub contract_address: String,
+    pub decimals: u8,
+    pub logo_url: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExistingEvmToken {
+    pub symbol: String,
+    pub name: String,
+    pub contract_address: String,
+    pub decimals: Option<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +145,7 @@ pub async fn execute_scan_balances(
     app: tauri::AppHandle,
     wallet_id: Option<i64>,
     wallet_ids: Option<Vec<i64>>,
+    chain_key: Option<String>,
 ) -> Result<ScanSummary, String> {
     let path = get_db_path(&app)?;
     if !path.exists() {
@@ -188,6 +199,53 @@ pub async fn execute_scan_balances(
         rows.filter_map(|r| r.ok()).collect()
     };
 
+    let existing_token_rows = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT wallet_id, chain, token_symbol, token_name, contract_address, decimals, logo_url
+                 FROM token_balances WHERE contract_address IS NOT NULL",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|row| row.ok()).collect::<Vec<_>>()
+    };
+    let mut existing_evm_tokens: std::collections::HashMap<(i64, String), Vec<ExistingEvmToken>> =
+        std::collections::HashMap::new();
+    let mut existing_token_logos = std::collections::HashMap::<(i64, String, String), String>::new();
+    for (token_wallet_id, token_chain, symbol, name, contract_address, decimals, logo_url) in existing_token_rows {
+        let chain_key = token_chain.to_lowercase();
+        if let Some(logo_url) = logo_url.filter(|url| !url.trim().is_empty()) {
+            existing_token_logos.insert(
+                (token_wallet_id, chain_key.clone(), contract_address.to_lowercase()),
+                logo_url,
+            );
+        }
+        if !matches!(chain_key.as_str(), "eth" | "robinhood" | "base" | "arb" | "bsc") {
+            continue;
+        }
+        existing_evm_tokens
+            .entry((token_wallet_id, chain_key))
+            .or_default()
+            .push(ExistingEvmToken {
+                symbol,
+                name: name.unwrap_or_default(),
+                contract_address,
+                decimals: decimals.and_then(|value| u8::try_from(value).ok()),
+            });
+    }
+
     drop(conn);
 
     if wallets.is_empty() {
@@ -204,6 +262,9 @@ pub async fn execute_scan_balances(
 
     for (w_id, evm_addr, sol_addr, btc_addr) in wallets {
         for chain in CHAINS {
+            if chain_key.as_deref().is_some_and(|requested| requested != chain.key) {
+                continue;
+            }
             let has_addr = match chain.kind {
                 ChainKind::Solana => sol_addr.is_some(),
                 ChainKind::Bitcoin => btc_addr.is_some(),
@@ -218,6 +279,10 @@ pub async fn execute_scan_balances(
             let c_evm = evm_addr.clone();
             let c_sol = sol_addr.clone();
             let c_btc = btc_addr.clone();
+            let c_existing_tokens = existing_evm_tokens
+                .get(&(w_id, chain.key.to_lowercase()))
+                .cloned()
+                .unwrap_or_default();
 
             tasks.push(async move {
                 let _permit = permit.acquire().await.ok();
@@ -241,6 +306,7 @@ pub async fn execute_scan_balances(
                         chain.symbol,
                         chain.rpcs,
                         chain.tokens,
+                        c_existing_tokens,
                         w_id,
                     )
                     .await
@@ -277,12 +343,14 @@ pub async fn execute_scan_balances(
 
         let mut insert_tok_stmt = tx
             .prepare(
-                "INSERT INTO token_balances (wallet_id, chain, token_symbol, token_name, balance, raw_balance, contract_address, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))
+                "INSERT INTO token_balances (wallet_id, chain, token_symbol, token_name, balance, raw_balance, contract_address, decimals, logo_url, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))
                  ON CONFLICT(wallet_id, chain, token_symbol, contract_address) DO UPDATE SET
                      balance = excluded.balance,
                      raw_balance = excluded.raw_balance,
                      token_name = excluded.token_name,
+                     decimals = excluded.decimals,
+                     logo_url = COALESCE(excluded.logo_url, token_balances.logo_url),
                      updated_at = excluded.updated_at;",
             )
             .map_err(|e| e.to_string())?;
@@ -304,9 +372,20 @@ pub async fn execute_scan_balances(
                         w_res.native_balance
                     ]);
 
+                    let mut tokens = w_res.tokens;
+                    for token in &mut tokens {
+                        if token.logo_url.is_none() {
+                            let logo_key = (
+                                token.wallet_id,
+                                token.chain.to_lowercase(),
+                                token.contract_address.to_lowercase(),
+                            );
+                            token.logo_url = existing_token_logos.get(&logo_key).cloned();
+                        }
+                    }
                     let _ = del_old_tok_stmt.execute(params![w_res.wallet_id, w_res.chain_key]);
 
-                    for tok in w_res.tokens {
+                    for tok in tokens {
                         let _ = insert_tok_stmt.execute(params![
                             tok.wallet_id,
                             tok.chain,
@@ -315,6 +394,8 @@ pub async fn execute_scan_balances(
                             tok.balance,
                             tok.raw_balance,
                             tok.contract_address,
+                            i64::from(tok.decimals),
+                            tok.logo_url,
                         ]);
                     }
                 }

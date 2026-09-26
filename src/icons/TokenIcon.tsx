@@ -1,12 +1,53 @@
+import { useEffect, useState } from "react";
 import type { IconProps } from "./types";
 import { ChainIcon } from "./ChainIcon";
 import { OFFICIAL_TOKEN_SPEC } from "../services/officialTokenService";
+import { useApp } from "../context/AppContext";
 
 export interface TokenIconProps extends IconProps {
   chain?: string;
   symbol?: string;
   contractAddress?: string;
   name?: string;
+  logoUrl?: string | null;
+}
+
+function isLocalOrPrivateHost(hostname: string): boolean {
+  const host = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  if (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local") ||
+    host.endsWith(".internal")
+  ) return true;
+
+  const octets = host.split(".").map(Number);
+  if (octets.length === 4 && octets.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)) {
+    const [first, second] = octets;
+    return first === 0 || first === 10 || first === 127 || first >= 224 ||
+      (first === 169 && second === 254) ||
+      (first === 172 && second >= 16 && second <= 31) ||
+      (first === 192 && second === 168) ||
+      (first === 100 && second >= 64 && second <= 127) ||
+      (first === 198 && (second === 18 || second === 19));
+  }
+
+  if (host === "::" || host === "::1" || host.startsWith("::ffff:")) return true;
+  const firstIpv6Segment = Number.parseInt(host.split(":")[0] || "0", 16);
+  return (firstIpv6Segment & 0xfe00) === 0xfc00 || (firstIpv6Segment & 0xffc0) === 0xfe80;
+}
+
+function safeRemoteLogoUrl(value: string | null | undefined): string | null {
+  if (!value || value.length > 2048) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname && !url.username && !url.password &&
+      !isLocalOrPrivateHost(url.hostname)
+      ? url.toString()
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -21,9 +62,14 @@ export function TokenIcon({
   symbol = "",
   contractAddress = "",
   name = "",
+  logoUrl,
   size = 16,
   className,
 }: TokenIconProps) {
+  const { sessionToken, isAirGapped } = useApp();
+  const [remoteLogoFailed, setRemoteLogoFailed] = useState(false);
+  useEffect(() => setRemoteLogoFailed(false), [logoUrl]);
+
   const normSym = (symbol || "").trim().toLowerCase();
   const normChain = (chain || "").trim().toLowerCase();
   const normAddr = (contractAddress || "").trim();
@@ -134,7 +180,26 @@ export function TokenIcon({
     return <ChainIcon chain="eth" size={size} className={className} />;
   }
 
-  // 4. Fallback to host blockchain icon (Solana icon for Solana SPL tokens, Robinhood feather for Robinhood tokens, etc.)
+  // Remote token artwork is an optional network resource: it is fetched only after the vault
+  // session is unlocked and Safe Mode is explicitly off. If it fails, fall back to the chain icon.
+  const remoteLogo = sessionToken && !isAirGapped && !remoteLogoFailed
+    ? safeRemoteLogoUrl(logoUrl)
+    : null;
+  if (remoteLogo) {
+    return (
+      <img
+        src={remoteLogo}
+        alt={`${name || symbol || "Token"} logo`}
+        loading="lazy"
+        referrerPolicy="no-referrer"
+        onError={() => setRemoteLogoFailed(true)}
+        style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }}
+        className={className}
+      />
+    );
+  }
+
+  // 4. Fallback to host blockchain icon (Solana icon for SPL tokens, Robinhood feather for Robinhood tokens, etc.)
   if (normChain) {
     return <ChainIcon chain={normChain} size={size} className={className} />;
   }

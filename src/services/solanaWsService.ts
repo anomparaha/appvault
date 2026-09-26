@@ -1,7 +1,8 @@
 /**
- * Dedicated Real-Time WebSocket Service for Solana Mainnet (Helius Dedicated WSS).
- * Uses accountSubscribe to reactively push native SOL balance changes directly to UI
- * and slotSubscribe for block/slot synchronization without manual refresh.
+ * Optional Solana mainnet WebSocket client.
+ * Account updates keep native SOL responsive; logsSubscribe notices any successful
+ * transaction mentioning a watched owner so the RPC scanner can refresh its SPL
+ * token accounts. HTTP/RPC polling remains the recovery path when WSS is unavailable.
  */
 
 export interface SolanaAccountUpdate {
@@ -11,240 +12,301 @@ export interface SolanaAccountUpdate {
   slot?: number;
 }
 
+export interface SolanaTransactionUpdate {
+  address: string;
+  signature: string;
+  slot?: number;
+}
+
 type AccountUpdateCallback = (update: SolanaAccountUpdate) => void;
+type TransactionCallback = (update: SolanaTransactionUpdate) => void;
 type SlotCallback = (slot: number) => void;
 type StatusCallback = (connected: boolean) => void;
 
 class SolanaWsClient {
-  private wsUrl: string = "wss://mainnet.helius-rpc.com/?api-key=f0adee34-1df4-45c6-b897-b93f4cad01c9";
+  private readonly wsUrl = "wss://mainnet.helius-rpc.com/?api-key=f0adee34-1df4-45c6-b897-b93f4cad01c9";
   private socket: WebSocket | null = null;
-  private isConnecting: boolean = false;
-  private isConnected: boolean = false;
+  private isConnecting = false;
+  private isConnected = false;
+  private enabled = false;
   private reconnectTimer: number | null = null;
+  private reconnectAttempts = 0;
   private pingInterval: number | null = null;
 
-  private watchedAddresses: Set<string> = new Set();
-  // Map subscriptionId -> address
-  private subIdToAddress: Map<number, string> = new Map();
-  // Map requestId -> address
-  private reqIdToAddress: Map<number, string> = new Map();
-  // Map address -> subscriptionId
-  private addressToSubId: Map<string, number> = new Map();
+  private watchedAddresses = new Set<string>();
+  private accountSubIdToAddress = new Map<number, string>();
+  private logSubIdToAddress = new Map<number, string>();
+  private accountReqIdToAddress = new Map<number, string>();
+  private logReqIdToAddress = new Map<number, string>();
 
   private slotSubId: number | null = null;
-  private currentSlot: number = 0;
-  private nextReqId: number = 100;
+  private currentSlot = 0;
+  private nextReqId = 100;
 
-  private accountListeners: Set<AccountUpdateCallback> = new Set();
-  private slotListeners: Set<SlotCallback> = new Set();
-  private statusListeners: Set<StatusCallback> = new Set();
+  private accountListeners = new Set<AccountUpdateCallback>();
+  private transactionListeners = new Set<TransactionCallback>();
+  private slotListeners = new Set<SlotCallback>();
+  private statusListeners = new Set<StatusCallback>();
+
+  public setEnabled(enabled: boolean): void {
+    if (this.enabled === enabled) {
+      if (enabled && !this.isConnected && !this.isConnecting && this.hasDemand()) this.connect();
+      return;
+    }
+
+    this.enabled = enabled;
+    if (!enabled) {
+      this.disconnect();
+      return;
+    }
+
+    if (this.hasDemand()) this.connect();
+  }
 
   public connect(): void {
-    if (typeof window === "undefined" || this.socket || this.isConnecting) return;
+    if (!this.enabled || typeof window === "undefined" || this.socket || this.isConnecting) return;
     this.isConnecting = true;
 
     try {
-      this.socket = new WebSocket(this.wsUrl);
+      const socket = new WebSocket(this.wsUrl);
+      this.socket = socket;
 
-      this.socket.onopen = () => {
+      socket.onopen = () => {
+        if (this.socket !== socket) return;
         this.isConnecting = false;
         this.isConnected = true;
+        this.reconnectAttempts = 0;
         this.notifyStatus(true);
 
-        // 1. Subscribe to Solana slots
-        this.sendJson({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "slotSubscribe",
-        });
-
-        // 2. Re-subscribe all watched addresses
-        for (const addr of this.watchedAddresses) {
-          this.subscribeAccount(addr);
+        this.sendJson({ jsonrpc: "2.0", id: 1, method: "slotSubscribe" });
+        for (const address of this.watchedAddresses) {
+          this.subscribeAccount(address);
+          this.subscribeLogs(address);
         }
-
-        // 3. Keepalive ping
         this.startPing();
       };
 
-      this.socket.onmessage = (event) => {
+      socket.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data);
-
-          // Handle subscription acknowledgment
-          if (data.id !== undefined && data.result !== undefined) {
-            const reqId = data.id;
-            const subId = data.result;
-
-            if (reqId === 1) {
-              this.slotSubId = subId;
-              return;
-            }
-
-            const addr = this.reqIdToAddress.get(reqId);
-            if (addr) {
-              this.reqIdToAddress.delete(reqId);
-              this.subIdToAddress.set(subId, addr);
-              this.addressToSubId.set(addr, subId);
-            }
-            return;
-          }
-
-          // Handle incoming notifications
-          if (data.method === "slotNotification" && data.params?.result) {
-            const slotNum = data.params.result.slot;
-            if (slotNum && slotNum !== this.currentSlot) {
-              this.currentSlot = slotNum;
-              this.notifySlot(slotNum);
-            }
-            return;
-          }
-
-          if (data.method === "accountNotification" && data.params) {
-            const subId = data.params.subscription;
-            const addr = this.subIdToAddress.get(subId);
-            const val = data.params.result?.value;
-
-            if (addr && val !== undefined) {
-              const lamports = typeof val.lamports === "number" ? val.lamports : 0;
-              const solAmt = lamports / 1_000_000_000;
-              const solFormatted =
-                solAmt === 0
-                  ? "0 SOL"
-                  : solAmt < 0.0001
-                  ? "< 0.0001 SOL"
-                  : `${solAmt.toFixed(4)} SOL`;
-
-              this.notifyAccount({
-                address: addr,
-                lamports,
-                solFormatted,
-                slot: data.params.result?.context?.slot,
-              });
-            }
-          }
+          this.handleMessage(JSON.parse(event.data));
         } catch (err) {
           console.warn("[Solana WS] Parse error:", err);
         }
       };
 
-      this.socket.onerror = (err) => {
+      socket.onerror = (err) => {
         console.warn("[Solana WS] Connection error:", err);
       };
 
-      this.socket.onclose = () => {
-        this.cleanup();
+      socket.onclose = () => {
+        if (this.socket !== socket) return;
+        this.cleanupSocketState();
         this.scheduleReconnect();
       };
     } catch (err) {
-      this.cleanup();
+      this.cleanupSocketState();
       this.scheduleReconnect();
     }
   }
 
+  private handleMessage(data: any): void {
+    if (data?.error && typeof data.id === "number") {
+      this.accountReqIdToAddress.delete(data.id);
+      this.logReqIdToAddress.delete(data.id);
+      console.warn("[Solana WS] Subscription request rejected:", data.error);
+      return;
+    }
+
+    if (data?.id !== undefined && data.result !== undefined) {
+      const requestId = Number(data.id);
+      const subscriptionId = Number(data.result);
+      if (!Number.isFinite(subscriptionId)) return;
+
+      if (requestId === 1) {
+        this.slotSubId = subscriptionId;
+        return;
+      }
+
+      const accountAddress = this.accountReqIdToAddress.get(requestId);
+      if (accountAddress) {
+        this.accountReqIdToAddress.delete(requestId);
+        this.accountSubIdToAddress.set(subscriptionId, accountAddress);
+        return;
+      }
+
+      const logAddress = this.logReqIdToAddress.get(requestId);
+      if (logAddress) {
+        this.logReqIdToAddress.delete(requestId);
+        this.logSubIdToAddress.set(subscriptionId, logAddress);
+      }
+      return;
+    }
+
+    if (data?.method === "slotNotification" && data.params?.result) {
+      const slot = Number(data.params.result.slot);
+      if (Number.isFinite(slot) && slot > 0 && slot !== this.currentSlot) {
+        this.currentSlot = slot;
+        this.notifySlot(slot);
+      }
+      return;
+    }
+
+    if (data?.method === "accountNotification" && data.params) {
+      const subscriptionId = Number(data.params.subscription);
+      const address = this.accountSubIdToAddress.get(subscriptionId);
+      const value = data.params.result?.value;
+      if (!address || !value || typeof value.lamports !== "number") return;
+
+      const lamports = value.lamports;
+      const solAmount = lamports / 1_000_000_000;
+      const formattedAmount = solAmount.toFixed(9).replace(/\.?0+$/, "");
+      this.notifyAccount({
+        address,
+        lamports,
+        solFormatted: `${formattedAmount || "0"} SOL`,
+        slot: data.params.result?.context?.slot,
+      });
+      return;
+    }
+
+    if (data?.method === "logsNotification" && data.params) {
+      const subscriptionId = Number(data.params.subscription);
+      const address = this.logSubIdToAddress.get(subscriptionId);
+      const result = data.params.result;
+      const signature = result?.value?.signature;
+      // Failed transactions do not change the wallet's token holdings.
+      if (address && signature && result?.value?.err == null) {
+        this.notifyTransaction({
+          address,
+          signature,
+          slot: result?.context?.slot,
+        });
+      }
+    }
+  }
+
   private sendJson(payload: unknown): void {
-    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+    if (this.socket?.readyState === WebSocket.OPEN) {
       this.socket.send(JSON.stringify(payload));
     }
   }
 
   private subscribeAccount(address: string): void {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
-    if (this.addressToSubId.has(address)) return;
+    if ([...this.accountSubIdToAddress.values()].includes(address)) return;
 
-    const reqId = ++this.nextReqId;
-    this.reqIdToAddress.set(reqId, address);
-
+    const requestId = ++this.nextReqId;
+    this.accountReqIdToAddress.set(requestId, address);
     this.sendJson({
       jsonrpc: "2.0",
-      id: reqId,
+      id: requestId,
       method: "accountSubscribe",
-      params: [
-        address,
-        {
-          encoding: "jsonParsed",
-          commitment: "confirmed",
-        },
-      ],
+      params: [address, { encoding: "jsonParsed", commitment: "confirmed" }],
     });
   }
 
-  private unsubscribeAccount(address: string): void {
-    const subId = this.addressToSubId.get(address);
-    if (subId !== undefined) {
-      this.addressToSubId.delete(address);
-      this.subIdToAddress.delete(subId);
+  private subscribeLogs(address: string): void {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) return;
+    if ([...this.logSubIdToAddress.values()].includes(address)) return;
 
-      if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-        this.sendJson({
-          jsonrpc: "2.0",
-          id: ++this.nextReqId,
-          method: "accountUnsubscribe",
-          params: [subId],
-        });
-      }
+    const requestId = ++this.nextReqId;
+    this.logReqIdToAddress.set(requestId, address);
+    this.sendJson({
+      jsonrpc: "2.0",
+      id: requestId,
+      method: "logsSubscribe",
+      params: [{ mentions: [address] }, { commitment: "confirmed" }],
+    });
+  }
+
+  private unsubscribeAddress(address: string): void {
+    this.accountReqIdToAddress.forEach((candidate, requestId) => {
+      if (candidate === address) this.accountReqIdToAddress.delete(requestId);
+    });
+    this.logReqIdToAddress.forEach((candidate, requestId) => {
+      if (candidate === address) this.logReqIdToAddress.delete(requestId);
+    });
+
+    for (const [subscriptionId, candidate] of this.accountSubIdToAddress) {
+      if (candidate !== address) continue;
+      this.accountSubIdToAddress.delete(subscriptionId);
+      this.sendJson({
+        jsonrpc: "2.0",
+        id: ++this.nextReqId,
+        method: "accountUnsubscribe",
+        params: [subscriptionId],
+      });
+    }
+
+    for (const [subscriptionId, candidate] of this.logSubIdToAddress) {
+      if (candidate !== address) continue;
+      this.logSubIdToAddress.delete(subscriptionId);
+      this.sendJson({
+        jsonrpc: "2.0",
+        id: ++this.nextReqId,
+        method: "logsUnsubscribe",
+        params: [subscriptionId],
+      });
     }
   }
 
   public setWatchedAddresses(addresses: string[]): void {
-    const nextSet = new Set(addresses.filter(Boolean));
+    const nextAddresses = new Set(addresses.filter(Boolean));
+    for (const oldAddress of this.watchedAddresses) {
+      if (!nextAddresses.has(oldAddress)) this.unsubscribeAddress(oldAddress);
+    }
 
-    // Unsubscribe removed
-    for (const oldAddr of this.watchedAddresses) {
-      if (!nextSet.has(oldAddr)) {
-        this.unsubscribeAccount(oldAddr);
+    this.watchedAddresses = nextAddresses;
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      for (const address of nextAddresses) {
+        this.subscribeAccount(address);
+        this.subscribeLogs(address);
       }
-    }
-
-    // Subscribe new
-    for (const newAddr of nextSet) {
-      if (!this.watchedAddresses.has(newAddr)) {
-        this.subscribeAccount(newAddr);
-      }
-    }
-
-    this.watchedAddresses = nextSet;
-
-    // Connect if we have addresses and listeners
-    if (this.watchedAddresses.size > 0 && !this.isConnected && !this.isConnecting) {
+    } else if (this.enabled && nextAddresses.size > 0) {
       this.connect();
     }
   }
 
-  public subscribeAccountUpdates(cb: AccountUpdateCallback): () => void {
-    this.accountListeners.add(cb);
-    if (!this.isConnected && !this.isConnecting) {
-      this.connect();
-    }
-    return () => {
-      this.accountListeners.delete(cb);
-    };
+  public subscribeAccountUpdates(callback: AccountUpdateCallback): () => void {
+    this.accountListeners.add(callback);
+    if (this.enabled) this.connect();
+    return () => this.accountListeners.delete(callback);
   }
 
-  public subscribeSlots(cb: SlotCallback): () => void {
-    this.slotListeners.add(cb);
-    if (!this.isConnected && !this.isConnecting) {
-      this.connect();
-    }
-    return () => {
-      this.slotListeners.delete(cb);
-    };
+  public subscribeTransactions(callback: TransactionCallback): () => void {
+    this.transactionListeners.add(callback);
+    if (this.enabled) this.connect();
+    return () => this.transactionListeners.delete(callback);
   }
 
-  public subscribeStatus(cb: StatusCallback): () => void {
-    this.statusListeners.add(cb);
-    cb(this.isConnected);
-    return () => {
-      this.statusListeners.delete(cb);
-    };
+  public subscribeSlots(callback: SlotCallback): () => void {
+    this.slotListeners.add(callback);
+    if (this.enabled) this.connect();
+    return () => this.slotListeners.delete(callback);
+  }
+
+  public subscribeStatus(callback: StatusCallback): () => void {
+    this.statusListeners.add(callback);
+    callback(this.isConnected);
+    return () => this.statusListeners.delete(callback);
   }
 
   private notifyAccount(update: SolanaAccountUpdate): void {
     for (const listener of this.accountListeners) {
       try {
         listener(update);
-      } catch (e) {
-        console.error("[Solana WS] Account listener error:", e);
+      } catch (err) {
+        console.error("[Solana WS] Account listener error:", err);
+      }
+    }
+  }
+
+  private notifyTransaction(update: SolanaTransactionUpdate): void {
+    for (const listener of this.transactionListeners) {
+      try {
+        listener(update);
+      } catch (err) {
+        console.error("[Solana WS] Transaction listener error:", err);
       }
     }
   }
@@ -253,18 +315,18 @@ class SolanaWsClient {
     for (const listener of this.slotListeners) {
       try {
         listener(slot);
-      } catch (e) {
-        console.error("[Solana WS] Slot listener error:", e);
+      } catch (err) {
+        console.error("[Solana WS] Slot listener error:", err);
       }
     }
   }
 
-  private notifyStatus(status: boolean): void {
+  private notifyStatus(connected: boolean): void {
     for (const listener of this.statusListeners) {
       try {
-        listener(status);
-      } catch (e) {
-        console.error("[Solana WS] Status listener error:", e);
+        listener(connected);
+      } catch (err) {
+        console.error("[Solana WS] Status listener error:", err);
       }
     }
   }
@@ -272,43 +334,67 @@ class SolanaWsClient {
   private startPing(): void {
     this.stopPing();
     this.pingInterval = window.setInterval(() => {
-      if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-        // Send a lightweight ping/slot query to keep connection warm
-        this.sendJson({
-          jsonrpc: "2.0",
-          id: 9999,
-          method: "getSlot",
-        });
-      }
-    }, 25000);
+      this.sendJson({ jsonrpc: "2.0", id: 9999, method: "getSlot" });
+    }, 25_000);
   }
 
   private stopPing(): void {
-    if (this.pingInterval) {
-      clearInterval(this.pingInterval);
+    if (this.pingInterval !== null) {
+      window.clearInterval(this.pingInterval);
       this.pingInterval = null;
     }
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimer) return;
+    if (!this.enabled || this.reconnectTimer !== null || !this.hasDemand()) return;
+    const delayMs = Math.min(3_000 * 2 ** Math.min(this.reconnectAttempts, 5), 60_000);
+    this.reconnectAttempts += 1;
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectTimer = null;
-      if (this.watchedAddresses.size > 0 || this.accountListeners.size > 0 || this.slotListeners.size > 0) {
-        this.connect();
-      }
-    }, 3000);
+      if (this.enabled && this.hasDemand()) this.connect();
+    }, delayMs);
   }
 
-  private cleanup(): void {
+  private hasDemand(): boolean {
+    return this.watchedAddresses.size > 0 || this.accountListeners.size > 0 ||
+      this.transactionListeners.size > 0 || this.slotListeners.size > 0;
+  }
+
+  private cleanupSocketState(): void {
     this.isConnecting = false;
     this.isConnected = false;
     this.socket = null;
     this.slotSubId = null;
-    this.subIdToAddress.clear();
-    this.reqIdToAddress.clear();
-    this.addressToSubId.clear();
+    this.accountSubIdToAddress.clear();
+    this.logSubIdToAddress.clear();
+    this.accountReqIdToAddress.clear();
+    this.logReqIdToAddress.clear();
     this.stopPing();
+    this.notifyStatus(false);
+  }
+
+  public disconnect(): void {
+    if (this.reconnectTimer !== null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.stopPing();
+    const socket = this.socket;
+    this.socket = null;
+    this.isConnecting = false;
+    this.isConnected = false;
+    this.slotSubId = null;
+    this.accountSubIdToAddress.clear();
+    this.logSubIdToAddress.clear();
+    this.accountReqIdToAddress.clear();
+    this.logReqIdToAddress.clear();
+    if (socket) {
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      socket.close();
+    }
     this.notifyStatus(false);
   }
 

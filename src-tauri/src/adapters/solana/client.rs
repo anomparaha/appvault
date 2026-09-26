@@ -16,6 +16,46 @@ pub struct SolanaAccountDetails {
     pub space: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SolanaTransactionSignature {
+    pub signature: String,
+    pub slot: u64,
+    pub block_time: Option<i64>,
+    pub confirmation_status: Option<String>,
+    pub failed: bool,
+}
+
+fn parse_solana_signature_entries(
+    entries: &serde_json::Value,
+) -> Result<Vec<SolanaTransactionSignature>, String> {
+    let entries = entries
+        .as_array()
+        .ok_or_else(|| "Invalid getSignaturesForAddress result".to_string())?;
+    Ok(entries
+        .iter()
+        .filter_map(|entry| {
+            let signature = entry.get("signature")?.as_str()?.trim();
+            if signature.is_empty()
+                || signature.len() > 100
+                || bs58::decode(signature).into_vec().ok()?.len() != 64
+            {
+                return None;
+            }
+            Some(SolanaTransactionSignature {
+                signature: signature.to_string(),
+                slot: entry.get("slot").and_then(|slot| slot.as_u64()).unwrap_or_default(),
+                block_time: entry.get("blockTime").and_then(|time| time.as_i64()),
+                confirmation_status: entry
+                    .get("confirmationStatus")
+                    .and_then(|status| status.as_str())
+                    .map(str::to_string),
+                failed: entry.get("err").map(|error| !error.is_null()).unwrap_or(false),
+            })
+        })
+        .collect())
+}
+
 fn shared_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(9))
@@ -308,4 +348,116 @@ pub async fn get_solana_account_details(
     }
 
     Err(last_err)
+}
+
+/// Returns the newest confirmed transaction signatures for an address, optionally continuing
+/// before a previously returned signature. The caller enforces vault-session and Safe Mode gates.
+pub async fn get_solana_transaction_history(
+    rpcs: &[&str],
+    address: &str,
+    before: Option<&str>,
+    limit: usize,
+) -> Result<Vec<SolanaTransactionSignature>, String> {
+    let client = shared_client();
+    let limit = limit.clamp(1, 100);
+    let mut last_err = "Failed to fetch Solana transaction history from RPC nodes".to_string();
+
+    for rpc in rpcs {
+        let mut config = serde_json::json!({
+            "commitment": "confirmed",
+            "limit": limit
+        });
+        if let Some(before) = before {
+            config["before"] = serde_json::Value::String(before.to_string());
+        }
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getSignaturesForAddress",
+            "params": [address, config]
+        });
+
+        let response = match client
+            .post(*rpc)
+            .header("Content-Type", "application/json")
+            .header("User-Agent", "Plurivex/1.0")
+            .json(&payload)
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                last_err = format!("RPC {rpc} failed: {error}");
+                continue;
+            }
+        };
+        if !response.status().is_success() {
+            last_err = format!("RPC {rpc} returned HTTP {}", response.status());
+            continue;
+        }
+        let data = match response.json::<serde_json::Value>().await {
+            Ok(data) => data,
+            Err(error) => {
+                last_err = format!("RPC {rpc} returned invalid JSON: {error}");
+                continue;
+            }
+        };
+        if let Some(error) = data.get("error") {
+            last_err = error
+                .get("message")
+                .and_then(|message| message.as_str())
+                .unwrap_or("Solana RPC rejected the history request")
+                .to_string();
+            continue;
+        }
+        let Some(entries) = data.get("result") else {
+            last_err = format!("RPC {rpc} returned an invalid getSignaturesForAddress response");
+            continue;
+        };
+        match parse_solana_signature_entries(entries) {
+            Ok(transactions) => return Ok(transactions),
+            Err(error) => last_err = format!("RPC {rpc}: {error}"),
+        }
+    }
+
+    Err(last_err)
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    #[test]
+    fn parses_signature_history_and_error_status() {
+        let response = serde_json::json!([
+            {
+                "signature": "5h6xBEauJ3PK6SWCZ1PGjBvj8vDdWG3KpwATGy1ARAXFSDwt8GFXM7W5Ncn16wmqokgpiKRLuS83KUxyZyv2sUYv",
+                "slot": 114,
+                "err": null,
+                "blockTime": 1_700_000_000,
+                "confirmationStatus": "finalized"
+            },
+            {
+                "signature": "5h6xBEauJ3PK6SWCZ1PGjBvj8vDdWG3KpwATGy1ARAXFSDwt8GFXM7W5Ncn16wmqokgpiKRLuS83KUxyZyv2sUYv",
+                "slot": 113,
+                "err": { "InstructionError": [0, "Custom"] },
+                "blockTime": null,
+                "confirmationStatus": "confirmed"
+            }
+        ]);
+
+        let history = parse_solana_signature_entries(&response).unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].slot, 114);
+        assert_eq!(history[0].block_time, Some(1_700_000_000));
+        assert!(!history[0].failed);
+        assert_eq!(history[0].confirmation_status.as_deref(), Some("finalized"));
+        assert!(history[1].failed);
+        assert_eq!(history[1].block_time, None);
+    }
+
+    #[test]
+    fn rejects_non_array_history_response() {
+        assert!(parse_solana_signature_entries(&serde_json::json!({ "error": "bad" })).is_err());
+    }
 }
