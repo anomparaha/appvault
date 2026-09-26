@@ -1,12 +1,16 @@
 import { useState, useMemo, useEffect } from "react";
-import { getActivities, subscribeActivities, type ActivityRecord } from "../../lib/activity";
-import { calculateWinRate, type Timeframe } from "../../lib/winrateAnalytics";
+import { useApp } from "../../context/AppContext";
+import { getTradePositions, subscribeTradePositions, type TokenTradePosition } from "../../services/tokenTradeHistoryService";
+import { getActivities, subscribeActivities, type ActivityRecord } from "../../lib/services/activity";
+import { calculateWinRate, type Timeframe } from "../../lib/services/winrateAnalytics";
 import { robinhoodWs } from "../../services/robinhoodWsService";
 import { solanaWs } from "../../services/solanaWsService";
 import { IconTrendingUp } from "../../icons";
 
 export function WinRateCard({ compact = false }: { compact?: boolean }) {
+  const { wallets, selectedSweepIds } = useApp();
   const [activities, setActivities] = useState<ActivityRecord[]>(() => getActivities());
+  const [positions, setPositions] = useState<TokenTradePosition[]>(() => getTradePositions());
   const [timeframe, setTimeframe] = useState<Timeframe>("7D");
   const [wsConnected, setWsConnected] = useState<boolean>(false);
   const [latestBlock, setLatestBlock] = useState<number>(0);
@@ -17,7 +21,11 @@ export function WinRateCard({ compact = false }: { compact?: boolean }) {
     const unsub = subscribeActivities((latest) => {
       setActivities(latest);
     });
-    return unsub;
+    const unsubPositions = subscribeTradePositions((latest) => setPositions(latest));
+    return () => {
+      unsub();
+      unsubPositions();
+    };
   }, []);
 
   useEffect(() => {
@@ -41,9 +49,14 @@ export function WinRateCard({ compact = false }: { compact?: boolean }) {
     };
   }, []);
 
+  const activeWallets = useMemo(() => {
+    if (selectedSweepIds.size === 0) return undefined;
+    return wallets.filter((wallet) => selectedSweepIds.has(wallet.id));
+  }, [wallets, selectedSweepIds]);
+
   const stats = useMemo(() => {
-    return calculateWinRate(activities, timeframe);
-  }, [activities, timeframe]);
+    return calculateWinRate(activities, timeframe, positions, activeWallets);
+  }, [activities, timeframe, positions, activeWallets]);
 
   const winRateColor = useMemo(() => {
     if (stats.totalTrades === 0) return "var(--ok)";

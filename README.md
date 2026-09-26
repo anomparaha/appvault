@@ -61,27 +61,32 @@ The application unifies multi-chain key identity management (EVM, Solana, and Bi
 ```
 plurivex/
 ├── src/                                  # Frontend React 19 + TypeScript + Vite
-│   ├── components/                       # User Interface Components
-│   │   ├── repair-workspace/             # Mnemonic Forensic Repair Workspace
-│   │   │   ├── components/               # Sub-components (Left, Center, Right, SessionTracker)
-│   │   │   ├── hooks/                    # useMnemonicAnalysis, useOnTheFlyScan
-│   │   │   └── types.ts                  # Session and analysis type contracts
-│   │   ├── sidebar/                      # Navigation & virtualized wallet catalog
-│   │   ├── AuthScreens.tsx               # PIN & Master Password Lock Screens
-│   │   ├── MainApp.tsx                   # Main Shell & View Router
-│   │   ├── SweeperWorkspace.tsx          # Batch Transaction Sweeper Console
-│   │   ├── DexBatchTrader.tsx            # Multi-wallet DEX Batch Swap Interface
-│   │   └── FundedWalletModal.tsx         # Jackpot Celebration Confirmation Modal
-│   ├── context/                          # Global State Management (AppContext)
-│   │   └── hooks/                        # useAuthVault, useWalletScanner, useWalletFilters
-│   ├── lib/                              # Cryptographic Utilities & Blockchain Clients
-│   │   ├── crypto.ts                     # WebCrypto & native vault wrappers
-│   │   ├── wallet.ts                     # Credential derivation (EVM, Solana, BTC)
-│   │   ├── chains.ts                     # RPC configuration, providers & token lists
-│   │   ├── sweeper.ts                    # Transaction signing & broadcast logic
-│   │   └── db.ts                         # Local Database Access Layer
-│   └── styles/                           # Modular CSS Design System
-│
+│   ├── components/                       # UI grouped by feature/domain
+│   │   ├── analytics/                    # Win-rate and trade-history views
+│   │   ├── auth/                         # PIN & master-password screens
+│   │   ├── layout/                       # Main shell, navigation, global UI
+│   │   ├── modals/                       # Wallet, transaction, and security dialogs
+│   │   ├── repair-workspace/             # Mnemonic forensic repair feature
+│   │   │   ├── components/               # Repair workspace panels
+│   │   │   ├── hooks/                    # Analysis and on-the-fly scan hooks
+│   │   │   └── types.ts                  # Repair-session contracts
+│   │   ├── sidebar/                      # Navigation & wallet catalog components
+│   │   ├── trade/                        # Multi-wallet DEX batch trading
+│   │   ├── wallet/                       # Wallet views and wallet/detail cards
+│   │   └── workspaces/                   # Import, scanning, RPC, and sweep screens
+│   ├── context/                          # Global app state and domain hooks
+│   ├── icons/                            # Typed React icon components
+│   ├── assets/icons/chains/              # Raw SVG assets used by chain icon wrappers
+│   ├── lib/                              # Frontend domain logic, grouped by concern
+│   │   ├── chains/                       # Chain configuration and token types
+│   │   ├── crypto/                       # Native vault, clipboard, and fingerprint IPC
+│   │   ├── db/                           # Local database IPC client
+│   │   ├── services/                     # Scanning, activity, and transaction helpers
+│   │   ├── types/                        # Per-domain type re-exports
+│   │   ├── utils/                        # Formatting, QR, and audio helpers
+│   │   └── wallets/                      # Wallet derivation, import, and BIP-39 helpers
+│   └── styles/                           # Modular CSS design system
+
 ├── src-tauri/                            # Native Rust Core (Tauri v2)
 │   ├── src/
 │   │   ├── adapters/                     # Blockchain & Oracle Network Adapters
@@ -92,6 +97,7 @@ plurivex/
 │   │   │   └── explorers/                # [Roadmap Stub] Explorer URL router hub
 │   │   ├── app/                          # IPC Application Layer
 │   │   │   ├── commands.rs               # [Live] Tauri IPC command handlers & Air-Gapped flag
+│   │   │   ├── registrar.rs              # [Live] App-domain command registration
 │   │   │   └── state.rs                  # [Roadmap Stub] Application runtime state
 │   │   ├── core/                         # Core Domain Logic
 │   │   │   ├── scanner/                  # [Live] Multi-threaded concurrent balance scanner
@@ -120,8 +126,10 @@ plurivex/
 │   │   │   ├── network/                  # [Roadmap Stub] Proxy rotator & RPC latency hedging
 │   │   │   ├── notifications/            # [Roadmap Stub] Webhook alerts (Discord/Slack)
 │   │   │   └── archive/                  # [Roadmap Stub] Portable encrypted .plurivex archive
-│   │   ├── db/                           # Local Database Migrations
+│   │   ├── db/                           # Local Database Commands & Migrations
+│   │   │   ├── commands.rs               # [Live] SQLite vault IPC handlers
 │   │   │   ├── migrations.rs             # [Live] Local database schema migrations
+│   │   │   ├── registrar.rs              # [Live] Database command registration
 │   │   │   └── schema.rs                 # [Live] Table name constants
 │   │   ├── utils/                        # [Roadmap Stub] Error handling & time utilities
 │   │   └── lib.rs                        # Tauri application runtime entrypoint

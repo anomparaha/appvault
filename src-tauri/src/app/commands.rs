@@ -28,13 +28,16 @@ pub fn verify_air_gap_inactive() -> Result<(), String> {
 #[tauri::command]
 pub async fn scan_balances(
     app: tauri::AppHandle,
+    session_token: String,
     wallet_id: Option<i64>,
     wallet_ids: Option<Vec<i64>>,
+    chain_key: Option<String>,
 ) -> Result<ScanSummary, String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
     if AIR_GAPPED_MODE.load(Ordering::SeqCst) {
         return Err("Air-Gapped Safe Mode is ACTIVE: Outbound network blocked.".to_string());
     }
-    execute_scan_balances(app, wallet_id, wallet_ids).await
+    execute_scan_balances(app, wallet_id, wallet_ids, chain_key).await
 }
 
 #[tauri::command]
@@ -138,7 +141,11 @@ pub async fn broadcast_solana_tx(raw_tx_base64: String) -> Result<String, String
 }
 
 #[tauri::command]
-pub async fn get_solana_account_details(address: String) -> Result<SolanaAccountDetails, String> {
+pub async fn get_solana_account_details(
+    session_token: String,
+    address: String,
+) -> Result<SolanaAccountDetails, String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
     if AIR_GAPPED_MODE.load(Ordering::SeqCst) {
         return Err("Air-Gapped Safe Mode is ACTIVE: Outbound network blocked.".to_string());
     }
@@ -355,8 +362,10 @@ pub struct OnTheFlyBalanceResult {
 
 #[tauri::command]
 pub async fn get_token_prices(
+    session_token: String,
     ids: Option<Vec<String>>,
 ) -> Result<crate::core::scanner::pricing::PriceReport, String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
     if AIR_GAPPED_MODE.load(Ordering::SeqCst) {
         return Err("Air-Gapped Safe Mode is ACTIVE: Price feeds blocked.".to_string());
     }
@@ -1261,7 +1270,11 @@ pub struct UpdateProgressPayload {
 }
 
 #[tauri::command]
-pub async fn vault_updater_check(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, String> {
+pub async fn vault_updater_check(
+    app: tauri::AppHandle,
+    session_token: String,
+) -> Result<Option<UpdateInfo>, String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
     verify_air_gap_inactive()?;
 
     use tauri_plugin_updater::UpdaterExt;
@@ -1284,7 +1297,11 @@ pub async fn vault_updater_check(app: tauri::AppHandle) -> Result<Option<UpdateI
 }
 
 #[tauri::command]
-pub async fn vault_updater_download_and_install(app: tauri::AppHandle) -> Result<(), String> {
+pub async fn vault_updater_download_and_install(
+    app: tauri::AppHandle,
+    session_token: String,
+) -> Result<(), String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
     verify_air_gap_inactive()?;
 
     use tauri::Emitter;
@@ -1644,4 +1661,3 @@ mod tests {
         }
     }
 }
-

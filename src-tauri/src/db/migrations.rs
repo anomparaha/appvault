@@ -74,5 +74,11 @@ pub fn get_migrations() -> Vec<Migration> {
             sql: "DROP TABLE IF EXISTS recovery_sessions;",
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 8,
+            description: "add_token_decimals_column",
+            sql: "ALTER TABLE token_balances ADD COLUMN decimals INTEGER;",
+            kind: MigrationKind::Up,
+        },
     ]
 }

@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { useApp } from "../../../context/AppContext";
-import { logActivity } from "../../../lib/activity";
+import { logActivity } from "../../../lib/services/activity";
 import type { MnemonicRepairResult, ParsedSolution } from "../types";
 
 interface LeftSolutionsPanelProps {

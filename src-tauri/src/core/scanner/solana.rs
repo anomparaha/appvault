@@ -3,6 +3,28 @@ use crate::adapters::solana::tokens::*;
 use crate::core::scanner::DiscoveredToken;
 use crate::core::scanner::WalletChainResult;
 
+fn format_spl_units(amount: u64, decimals: u8) -> String {
+    let raw = amount.to_string();
+    let scale = usize::from(decimals);
+    if scale == 0 {
+        return raw;
+    }
+    let (whole, fraction) = if raw.len() > scale {
+        let split_at = raw.len() - scale;
+        (raw[..split_at].to_string(), raw[split_at..].to_string())
+    } else {
+        ("0".to_string(), format!("{}{}", "0".repeat(scale - raw.len()), raw))
+    };
+    let fraction = fraction.trim_end_matches('0');
+    if fraction.is_empty() {
+        return whole;
+    }
+    const MAX_DISPLAY_DECIMALS: usize = 24;
+    let shown = &fraction[..fraction.len().min(MAX_DISPLAY_DECIMALS)];
+    let truncated = fraction.len() > MAX_DISPLAY_DECIMALS;
+    format!("{whole}.{shown}{}", if truncated { "…" } else { "" })
+}
+
 pub async fn scan_solana_for_wallet(
     client: &reqwest::Client,
     address: &str,
@@ -30,10 +52,13 @@ pub async fn scan_solana_for_wallet(
         if let Ok(res1) = post_native {
             if res1.status().is_success() {
                 if let Ok(data1) = res1.json::<serde_json::Value>().await {
-                    let lamports = data1
+                    let Some(lamports) = data1
                         .pointer("/result/value")
-                        .and_then(|v| v.as_u64())
-                        .unwrap_or(0);
+                        .and_then(|value| value.as_u64())
+                    else {
+                        last_err = format!("RPC {rpc} returned an invalid Solana getBalance response");
+                        continue;
+                    };
                     let (sol_amt, display_str) = format_sol_display(lamports);
                     let mut has_funds = sol_amt > 0.0;
                     let mut tokens = Vec::new();
@@ -45,12 +70,13 @@ pub async fn scan_solana_for_wallet(
 
                     struct RawAccount {
                         mint: String,
-                        ui_amount: f64,
                         amount_raw: String,
+                        decimals: u8,
                         default_type: &'static str,
                     }
 
                     let mut raw_accounts = Vec::new();
+                    let mut token_scan_complete = true;
 
                     for (prog_id, default_type) in token_programs {
                         let spl_res = client
@@ -70,49 +96,78 @@ pub async fn scan_solana_for_wallet(
                             .send()
                             .await;
 
-                        if let Ok(spl_response) = spl_res {
-                            if spl_response.status().is_success() {
-                                if let Ok(spl_data) = spl_response.json::<serde_json::Value>().await {
-                                    if let Some(accounts) = spl_data
-                                        .get("result")
-                                        .and_then(|r| r.get("value"))
-                                        .and_then(|v| v.as_array())
-                                    {
-                                        for acc in accounts {
-                                            let info = acc
-                                                .get("account")
-                                                .and_then(|a| a.get("data"))
-                                                .and_then(|d| d.get("parsed"))
-                                                .and_then(|p| p.get("info"));
-                                            let Some(info) = info else {
-                                                continue;
-                                            };
-                                            let mint =
-                                                info.get("mint").and_then(|m| m.as_str()).unwrap_or("");
-                                            let token_amount = info.get("tokenAmount");
-                                            let ui_amount = token_amount
-                                                .and_then(|t| t.get("uiAmount"))
-                                                .and_then(|u| u.as_f64())
-                                                .unwrap_or(0.0);
-                                            let amount_raw = token_amount
-                                                .and_then(|t| t.get("amount"))
-                                                .and_then(|a| a.as_str())
-                                                .unwrap_or("0");
+                        let Ok(spl_response) = spl_res else {
+                            token_scan_complete = false;
+                            continue;
+                        };
+                        if !spl_response.status().is_success() {
+                            token_scan_complete = false;
+                            continue;
+                        }
+                        let Ok(spl_data) = spl_response.json::<serde_json::Value>().await else {
+                            token_scan_complete = false;
+                            continue;
+                        };
+                        let Some(accounts) = spl_data
+                            .get("result")
+                            .and_then(|result| result.get("value"))
+                            .and_then(|value| value.as_array())
+                        else {
+                            token_scan_complete = false;
+                            continue;
+                        };
 
-                                            if ui_amount > 0.0 && !mint.is_empty() {
-                                                has_funds = true;
-                                                raw_accounts.push(RawAccount {
-                                                    mint: mint.to_string(),
-                                                    ui_amount,
-                                                    amount_raw: amount_raw.to_string(),
-                                                    default_type,
-                                                });
-                                            }
-                                        }
-                                    }
-                                }
+                        for account in accounts {
+                            let info = account
+                                .get("account")
+                                .and_then(|account| account.get("data"))
+                                .and_then(|data| data.get("parsed"))
+                                .and_then(|parsed| parsed.get("info"));
+                            let Some(info) = info else {
+                                token_scan_complete = false;
+                                continue;
+                            };
+                            let Some(mint) = info.get("mint").and_then(|value| value.as_str()) else {
+                                token_scan_complete = false;
+                                continue;
+                            };
+                            let token_amount = info.get("tokenAmount");
+                            let Some(amount_raw) = token_amount
+                                .and_then(|amount| amount.get("amount"))
+                                .and_then(|amount| amount.as_str())
+                            else {
+                                token_scan_complete = false;
+                                continue;
+                            };
+                            let Ok(raw_amount_value) = amount_raw.parse::<u64>() else {
+                                token_scan_complete = false;
+                                continue;
+                            };
+                            let Some(decimals) = token_amount
+                                .and_then(|amount| amount.get("decimals"))
+                                .and_then(|value| value.as_u64())
+                                .and_then(|value| u8::try_from(value).ok())
+                            else {
+                                token_scan_complete = false;
+                                continue;
+                            };
+                            if raw_amount_value > 0 && !mint.is_empty() {
+                                has_funds = true;
+                                raw_accounts.push(RawAccount {
+                                    mint: mint.to_string(),
+                                    amount_raw: amount_raw.to_string(),
+                                    decimals,
+                                    default_type,
+                                });
                             }
                         }
+                    }
+
+                    // Never persist an empty token list when an RPC failed to read
+                    // either token program; that would erase previously detected SPL assets.
+                    if !token_scan_complete {
+                        last_err = format!("RPC {rpc} failed to read all Solana token programs");
+                        continue;
                     }
 
                     // Dynamically resolve metadata for unknown mints
@@ -151,15 +206,8 @@ pub async fn scan_solana_for_wallet(
                             (format!("{start}..{end}"), acc.default_type.to_string())
                         };
 
-                        let formatted: String = if acc.ui_amount < 0.0001 {
-                            format!("{:.8} {}", acc.ui_amount, symbol)
-                        } else if acc.ui_amount < 1.0 {
-                            format!("{:.6} {}", acc.ui_amount, symbol)
-                        } else if acc.ui_amount < 1000.0 {
-                            format!("{:.4} {}", acc.ui_amount, symbol)
-                        } else {
-                            format!("{:.2} {}", acc.ui_amount, symbol)
-                        };
+                        let raw_amount = acc.amount_raw.parse::<u64>().unwrap_or(0);
+                        let formatted = format!("{} {}", format_spl_units(raw_amount, acc.decimals), symbol);
 
                         tokens.push(DiscoveredToken {
                             wallet_id,
@@ -169,6 +217,7 @@ pub async fn scan_solana_for_wallet(
                             balance: formatted,
                             raw_balance: acc.amount_raw,
                             contract_address: acc.mint,
+                            decimals: acc.decimals,
                         });
                     }
 
@@ -286,21 +335,35 @@ async fn resolve_solana_token_metas(
         {
             if resp.status().is_success() {
                 if let Ok(data) = resp.json::<serde_json::Value>().await {
-                    if let Some(pairs) = data.get("pairs").and_then(|p| p.as_array()) {
-                        if let Some(first) = pairs.first() {
-                            let sym = first
-                                .pointer("/baseToken/symbol")
-                                .and_then(|s| s.as_str())
+                    if let Some(pairs) = data.get("pairs").and_then(|pairs| pairs.as_array()) {
+                        let matched_token = pairs.iter().find_map(|pair| {
+                            let base_address = pair
+                                .pointer("/baseToken/address")
+                                .and_then(|value| value.as_str());
+                            let quote_address = pair
+                                .pointer("/quoteToken/address")
+                                .and_then(|value| value.as_str());
+                            if base_address == Some(mint.as_str()) {
+                                pair.get("baseToken")
+                            } else if quote_address == Some(mint.as_str()) {
+                                pair.get("quoteToken")
+                            } else {
+                                None
+                            }
+                        });
+                        if let Some(token) = matched_token {
+                            let sym = token
+                                .get("symbol")
+                                .and_then(|value| value.as_str())
                                 .unwrap_or("")
                                 .trim()
                                 .trim_matches('\0');
-                            let name = first
-                                .pointer("/baseToken/name")
-                                .and_then(|n| n.as_str())
+                            let name = token
+                                .get("name")
+                                .and_then(|value| value.as_str())
                                 .unwrap_or("")
                                 .trim()
                                 .trim_matches('\0');
-
                             if !sym.is_empty() {
                                 resolved.insert(mint.clone(), (sym.to_string(), name.to_string()));
                             }
