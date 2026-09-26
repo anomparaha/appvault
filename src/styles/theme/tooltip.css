@@ -1,0 +1,143 @@
+/* ==========================================================================
+   PLURIVEX — Precision Security Console Tooltips
+   Factory-grade, hardware-inspired floating micro-overlay.
+   ========================================================================== */
+
+.pvx-tooltip-portal {
+  position: fixed;
+  z-index: 999999;
+  pointer-events: none;
+  box-sizing: border-box;
+  background: rgba(18, 22, 28, 0.96);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    0 8px 30px rgba(0, 0, 0, 0.7),
+    0 2px 8px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 6px 11px;
+  font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+  font-size: 11px;
+  font-weight: 500;
+  color: #E8EAEF;
+  line-height: 1.45;
+  display: inline-flex;
+  align-items: center;
+  width: max-content;
+  max-width: min(300px, calc(100vw - 24px));
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: break-word;
+  opacity: 0;
+  transform-origin: center;
+  transition:
+    opacity 0.12s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform, opacity;
+}
+
+.pvx-tooltip-portal.pvx-tooltip-visible {
+  opacity: 1;
+}
+
+/* Tooltip Positions & Micro-spring Animations */
+.pvx-tooltip-portal[data-pos="top"] {
+  transform: translateY(3px) scale(0.97);
+}
+.pvx-tooltip-portal[data-pos="top"].pvx-tooltip-visible {
+  transform: translateY(0) scale(1);
+}
+
+.pvx-tooltip-portal[data-pos="bottom"] {
+  transform: translateY(-3px) scale(0.97);
+}
+.pvx-tooltip-portal[data-pos="bottom"].pvx-tooltip-visible {
+  transform: translateY(0) scale(1);
+}
+
+.pvx-tooltip-portal[data-pos="left"] {
+  transform: translateX(3px) scale(0.97);
+}
+.pvx-tooltip-portal[data-pos="left"].pvx-tooltip-visible {
+  transform: translateX(0) scale(1);
+}
+
+.pvx-tooltip-portal[data-pos="right"] {
+  transform: translateX(-3px) scale(0.97);
+}
+.pvx-tooltip-portal[data-pos="right"].pvx-tooltip-visible {
+  transform: translateX(0) scale(1);
+}
+
+/* Caret / Arrow Indicator */
+.pvx-tooltip-arrow {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: rgba(18, 22, 28, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+
+.pvx-tooltip-portal[data-pos="top"] .pvx-tooltip-arrow {
+  bottom: -4px;
+  border-top: none;
+  border-left: none;
+}
+
+.pvx-tooltip-portal[data-pos="bottom"] .pvx-tooltip-arrow {
+  top: -4px;
+  border-bottom: none;
+  border-right: none;
+}
+
+.pvx-tooltip-portal[data-pos="left"] .pvx-tooltip-arrow {
+  right: -4px;
+  border-left: none;
+  border-bottom: none;
+}
+
+.pvx-tooltip-portal[data-pos="right"] .pvx-tooltip-arrow {
+  left: -4px;
+  border-right: none;
+  border-top: none;
+}
+
+/* Tooltip Content Container */
+.pvx-tooltip-content {
+  display: inline;
+  line-height: 1.45;
+}
+
+/* Tooltip Text */
+.pvx-tooltip-text {
+  display: inline;
+  line-height: 1.45;
+  letter-spacing: 0.01em;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+/* Kbd / Shortcut Badge inside Tooltip */
+.pvx-tooltip-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  vertical-align: baseline;
+  margin-left: 6px;
+  font-family: var(--mono, 'JetBrains Mono', monospace);
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: var(--accent, #C9CFD8);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}

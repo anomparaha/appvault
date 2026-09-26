@@ -1,0 +1,477 @@
+/* ==========================================================================
+   Plurivex — Dedicated Import Workspace Styles
+   Matches Screen 3 of mockup workflow with desktop security console styling.
+   ========================================================================== */
+
+.import-workspace-view {
+  padding: 20px 24px 48px;
+  max-width: 1100px;
+  margin: 0 auto;
+  min-width: 0;
+}
+
+/* ── Unified Security Status Badges ── */
+.import-sec-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  cursor: help;
+  transition: all var(--t-fast);
+}
+
+.import-sec-badge:hover {
+  border-color: var(--ok-border);
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+.import-sec-badge .sec-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 6px rgba(16, 185, 129, 0.45);
+  flex-shrink: 0;
+}
+
+/* ── 3-Step Wizard Navigation ── */
+.import-steps-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 22px;
+  padding: 14px 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+
+.import-step-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--t-fast);
+  background: transparent;
+  border: none;
+  padding: 4px 8px;
+  border-radius: var(--r-sm);
+}
+
+.import-step-item:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.import-step-item .step-num {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-family: var(--mono);
+  font-weight: 700;
+}
+
+.import-step-item.is-active {
+  color: var(--text);
+}
+
+.import-step-item.is-active .step-num {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #16191F;
+}
+
+.import-step-item.is-done {
+  color: var(--ok);
+}
+
+.import-step-item.is-done .step-num {
+  background: var(--ok-soft);
+  border-color: var(--ok-border);
+  color: var(--ok);
+}
+
+.import-step-divider {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* ── Source Selection Grid (Step 1) ── */
+.import-src-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.import-src-card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  padding: 22px 18px;
+  text-align: center;
+  cursor: pointer;
+  transition: all var(--t-fast);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.import-src-card:hover {
+  border-color: var(--border-accent);
+  background: var(--surface-2);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.import-src-card.is-selected {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--accent-border), var(--shadow-accent);
+}
+
+.import-src-card .src-icon-box {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  margin-bottom: 12px;
+  transition: all var(--t-fast);
+}
+
+.import-src-card.is-selected .src-icon-box {
+  background: var(--accent);
+  color: #16191F;
+  border-color: var(--accent);
+}
+
+.import-src-card h4 {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text);
+  margin-bottom: 5px;
+}
+
+.import-src-card p {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.45;
+  margin: 0;
+}
+
+.import-src-card .src-selected-tick {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #16191F;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* ── Workspace Dropzone & Input Deck (Step 2) ── */
+.import-input-deck {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 22px;
+  margin-bottom: 20px;
+}
+
+.import-actions-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.import-quick-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.import-workspace-dropzone {
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--surface-inset);
+  min-height: 220px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  transition: all var(--t-fast);
+  overflow: hidden;
+}
+
+.import-workspace-dropzone:focus-within,
+.import-workspace-dropzone.is-dragover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.import-workspace-textarea {
+  width: 100%;
+  flex: 1;
+  min-height: 220px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.7;
+  padding: 16px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.import-workspace-textarea::placeholder {
+  color: var(--text-faint);
+  font-family: var(--font);
+}
+
+.import-dropzone-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  pointer-events: none;
+  text-align: center;
+  padding: 24px;
+}
+
+.import-dropzone-placeholder svg {
+  color: var(--accent);
+}
+
+.import-dropzone-placeholder b {
+  font-size: 13px;
+  color: var(--text);
+}
+
+.import-dropzone-placeholder span {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+/* ── Results View & Discovered Wallets (Step 3) ── */
+.import-results-deck {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 22px;
+  margin-bottom: 20px;
+}
+
+.import-banner-success {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--ok-soft);
+  border: 1px solid var(--ok-border);
+  border-radius: var(--r-md);
+  padding: 14px 18px;
+  margin-bottom: 18px;
+}
+
+.import-banner-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--ok);
+  color: #16191F;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.import-banner-text b {
+  font-size: 13px;
+  color: var(--text);
+  display: block;
+}
+
+.import-banner-text span {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+}
+
+.import-discovered-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 340px;
+  overflow-y: auto;
+  margin-bottom: 18px;
+  padding-right: 4px;
+}
+
+.import-discovered-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  gap: 12px;
+}
+
+.import-discovered-row:hover {
+  border-color: var(--border-accent);
+}
+
+.import-discovered-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.import-discovered-addr {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Footer Actions Bar ── */
+.import-step-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  gap: 12px;
+}
+
+.import-footer-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.import-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ── Direct Action Cards Enhancements ── */
+.import-src-card .src-card-action {
+  margin-top: 14px;
+  font-size: 11px;
+  font-weight: 650;
+  padding: 5px 12px;
+  border-radius: var(--r-pill);
+  background: var(--surface-3);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: all var(--t-fast);
+  pointer-events: none;
+}
+
+.import-src-card:hover .src-card-action {
+  background: var(--accent);
+  color: #16191F;
+  border-color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.import-src-card.is-selected .src-card-action {
+  background: var(--accent);
+  color: #16191F;
+  border-color: var(--accent);
+}
+
+/* ── Dedicated Seed Input Deck ── */
+.import-seed-deck {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 22px;
+  margin-bottom: 20px;
+}
+
+.import-seed-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.import-word-pills {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.import-word-pill {
+  height: 24px;
+  padding: 0 10px;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--t-fast);
+}
+
+.import-word-pill:hover {
+  color: var(--text);
+  border-color: var(--border-accent);
+}
+
+.import-word-pill.is-active {
+  background: var(--accent);
+  color: #16191F;
+  border-color: var(--accent);
+  font-weight: 700;
+}

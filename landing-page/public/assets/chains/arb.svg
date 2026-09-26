@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" data-icon="IconArbitrumHex20pxS">
+  <!-- Outer Hexagon Border -->
+  <polygon points="10,1 18,5.6 18,14.4 10,19 2,14.4 2,5.6" fill="#88bbee" stroke="#90c8ff" stroke-width="0.8" />
+  <!-- Inner Hexagon Background -->
+  <polygon points="10,2 17,6 17,14 10,18 3,14 3,6" fill="#131e33" />
+  
+  <!-- Cyan/Azure Right Facets -->
+  <polygon points="10.8,5.4 15.6,14.6 12.8,14.6 8.8,7.2" fill="#12aaff" />
+  <polygon points="12.5,9 15.6,14.6 14.2,14.6 11.5,9.6" fill="#0077dd" opacity="0.85" />
+  
+  <!-- White Left Diagonal Stripes -->
+  <polygon points="8.2,4.6 9.8,4.6 5.8,15.4 4.2,15.4" fill="#ffffff" />
+  <polygon points="10.8,4.6 12.4,4.6 7.4,15.4 5.8,15.4" fill="#ffffff" />
+</svg>

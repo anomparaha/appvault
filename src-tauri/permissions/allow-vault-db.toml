@@ -1,0 +1,22 @@
+[[permission]]
+identifier = "allow-vault-db"
+description = "Allow structured typed access to local database via isolated native Rust commands (no raw SQL)"
+commands.allow = [
+  "vault_db_init",
+  "vault_db_has_master_password",
+  "vault_db_has_pin",
+  "vault_db_save_master_password",
+  "vault_db_save_pin_vault",
+  "vault_db_verify_master_password",
+  "vault_db_reset_entire_vault",
+  "vault_db_insert_wallets_batch",
+  "vault_db_get_all_wallets",
+  "vault_db_delete_wallet",
+  "vault_db_delete_all_wallets",
+  "vault_db_get_existing_fingerprints",
+  "vault_db_get_existing_addresses",
+  "vault_db_update_wallet_label",
+  "vault_db_update_wallet_addresses",
+  "vault_db_cleanup_duplicate_wallets",
+  "vault_db_clear_swept_balance"
+]

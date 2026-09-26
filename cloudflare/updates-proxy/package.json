@@ -1,0 +1,17 @@
+{
+  "name": "plurivex-updates-proxy",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker relay for Plurivex desktop app OTA updates",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240909.0",
+    "typescript": "^5.5.4",
+    "wrangler": "^3.76.0"
+  },
+  "private": true
+}

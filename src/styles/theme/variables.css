@@ -1,0 +1,332 @@
+/* ==========================================================================
+   PLURIVEX — Design System
+   Security console aesthetic: precise, disciplined, data-dense.
+   One token set. No !important. No duplicate rules.
+   ========================================================================== */
+
+
+:root {
+  /* Surfaces — Slate Anthracite Night */
+  --bg: #171B21;
+  --bg-elevated: #1E232B;
+  --surface: #1E232B;
+  --surface-1: #1E232B;
+  --surface-2: #232932;
+  --surface-3: #282F39;
+  --surface-inset: #1A1F27;
+  --surface-hover: #262D37;
+  --sidebar: #1A1F27;
+
+  /* Borders — Precision Slate Hairline */
+  --border: #2C333E;
+  --border-strong: #39414D;
+  --border-accent: #454E5A;
+
+  /* Typography — Crisp Silver Platinum & Slate Tone */
+  --text: #E8EAEF;
+  --text-secondary: #A2A9B6;
+  --text-dim: #79808E;
+  --text-faint: #565D6A;
+
+  /* Accent — Reversed Platinum Silver Highlight */
+  --accent: #C9CFD8;
+  --accent-hover: #E3E7EC;
+  --accent-soft: rgba(201, 207, 216, 0.10);
+  --accent-border: rgba(201, 207, 216, 0.25);
+  --accent-glow: rgba(201, 207, 216, 0.15);
+
+  /* Status */
+  --danger: #F87171;
+  --danger-hover: #ef4444;
+  --danger-soft: rgba(248, 113, 113, 0.10);
+  --danger-border: rgba(248, 113, 113, 0.30);
+  --warning: #E3B341;
+  --warning-soft: rgba(227, 179, 65, 0.10);
+  --warning-border: rgba(227, 179, 65, 0.30);
+  --info: #60A5FA;
+  --info-soft: rgba(96, 165, 250, 0.10);
+  --ok: #4ADE80;
+  --ok-soft: rgba(74, 222, 128, 0.10);
+  --ok-border: rgba(74, 222, 128, 0.30);
+
+  /* Chain identity */
+  --chain-eth: #60A5FA;
+  --chain-bsc: #FBBF24;
+  --chain-base: #38BDF8;
+  --chain-arb: #0ea5e9;
+  --chain-sol: #C084FC;
+  --chain-avax: #F87171;
+  --chain-polygon: #A78BFA;
+  --chain-robinhood: #ccff00;
+
+  /* Radius scale */
+  --r-sm: 6px;
+  --r-md: 9px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-pill: 999px;
+
+  /* Spacing scale */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+
+  /* Component sizing */
+  --header-h: 48px;
+  --footer-h: 28px;
+  --sidebar-w: 240px;
+  --btn-h-sm: 26px;
+  --btn-h-md: 29px;
+  --btn-h-lg: 36px;
+
+  /* Shadows — Deep Atmospheric Soft Shadow */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.45), 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-accent: 0 0 20px rgba(201, 207, 216, 0.12);
+
+  /* Fonts — Offline-Safe Native System Font Hierarchy */
+  --font-display: "Space Grotesk", "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+  --mono: "JetBrains Mono", "SF Mono", "Roboto Mono", Menlo, Monaco, Consolas, ui-monospace, monospace;
+
+  /* Motion */
+  --ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --t-fast: 0.12s;
+  --t-base: 0.18s;
+}
+
+/* ── Reset ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { height: 100%; overflow: hidden; }
+
+body {
+  font-family: var(--font);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+button, input, textarea, select { font-family: inherit; -webkit-appearance: none; appearance: none; }
+button::-moz-focus-inner { border: 0; padding: 0; }
+*, *::before, *::after { -webkit-tap-highlight-color: transparent; }
+*:focus, *:focus-visible, *:focus-within, *:active { outline: none !important; }
+input, textarea, select { outline: none !important; box-shadow: none !important; user-select: text; }
+
+.mono { font-family: var(--mono); }
+/* Text utility classes — used throughout components for hint/error/emphasis text.
+   Missing entirely before this, so every element using them rendered at default
+   size/color instead of the intended muted/small/danger/white treatment. */
+.text-muted { color: var(--text-dim); }
+.text-dim { color: var(--text-dim); }
+.text-faint { color: var(--text-faint); }
+.text-danger { color: var(--danger); }
+.text-white { color: #ffffff; }
+.text-xs { font-size: 11px; }
+.text-sm { font-size: 12px; }
+a { color: inherit; text-decoration: none; }
+
+.scrollable { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+.scrollable:hover { scrollbar-color: rgba(148, 163, 184, 0.2) transparent; }
+.scrollable::-webkit-scrollbar { width: 6px; height: 6px; }
+.scrollable::-webkit-scrollbar-thumb { background: transparent; border-radius: var(--r-pill); }
+.scrollable:hover::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.18); }
+
+/* ==========================================================================
+   Primitives — buttons, inputs, badges, cards
+   ========================================================================== */
+
+/* ── Global Button Styles ── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: var(--btn-h-md);
+  padding: 0 12px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--t-fast);
+  user-select: none;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.20), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.20);
+  color: #FFFFFF;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.30);
+}
+.btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+.btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+.btn-sm, .btn.sm {
+  height: var(--btn-h-sm);
+  padding: 0 9px;
+  font-size: 11px;
+  gap: 4px;
+  border-radius: 6px;
+}
+.btn-lg {
+  height: var(--btn-h-lg);
+  padding: 0 16px;
+  font-size: 12px;
+  border-radius: 8px;
+}
+.btn-block {
+  width: 100%;
+}
+
+.btn-primary, .btn.primary, .btn-accent {
+  background: rgba(255, 255, 255, 0.14) !important;
+  border: 1px solid rgba(255, 255, 255, 0.28) !important;
+  color: #FFFFFF !important;
+  font-weight: 650;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.20) !important;
+}
+.btn-primary:hover:not(:disabled), .btn.primary:hover:not(:disabled), .btn-accent:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.22) !important;
+  border-color: rgba(255, 255, 255, 0.42) !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25) !important;
+  transform: translateY(-1px);
+}
+.btn-primary:active:not(:disabled), .btn.primary:active:not(:disabled), .btn-accent:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.btn-ghost {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  color: var(--text-secondary);
+}
+.btn-ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.20);
+  color: #FFFFFF;
+  transform: translateY(-1px);
+}
+.btn-ghost:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.btn-outline-accent {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  color: #FFFFFF;
+}
+.btn-outline-accent:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.35);
+  color: #FFFFFF;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  transform: translateY(-1px);
+}
+
+.btn-danger {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  color: #f87171;
+  font-weight: 600;
+}
+.btn-danger:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.22);
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #FFFFFF;
+  box-shadow: 0 2px 10px rgba(239, 68, 68, 0.25);
+  transform: translateY(-1px);
+}
+.btn-danger:active:not(:disabled) {
+  transform: translateY(0);
+}
+.btn-danger-ghost {
+  background: transparent;
+  border: 1px solid rgba(239, 68, 68, 0.22);
+  color: #f87171;
+}
+.btn-danger-ghost:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.40);
+  color: #FFFFFF;
+}
+
+/* Inputs — one rule set for every text input in the app */
+input[type="text"]:not(.reset-password-input):not(.header-search-input), input[type="password"]:not(.reset-password-input):not(.header-search-input), input[type="number"], input[type="search"], textarea,
+.search-input, .deck-input-field, .sweeper-input, .custom-gwei-input, .tag-input-sm,
+.field input, .field select, .sweep-input, .dex-input, .export-tag-select {
+  width: 100%;
+  background: var(--surface-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 8px 12px;
+  color: var(--text);
+  font-size: 12px;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+input:not(.reset-password-input):not(.header-search-input):focus, textarea:focus, select:focus,
+.search-input:focus, .deck-input-field:focus, .sweeper-input:focus, .custom-gwei-input:focus,
+.tag-input-sm:focus, .field input:focus, .sweep-input:focus, .dex-input:focus {
+  border-color: var(--border-accent);
+  box-shadow: 0 0 0 2px rgba(201, 207, 216, 0.12);
+}
+input::placeholder, textarea::placeholder { color: var(--text-dim); }
+
+/* Hide native browser white number spinners */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* Hide native Microsoft Edge / WebView2 password reveal and clear icons */
+input[type="password"]::-ms-reveal,
+input[type="password"]::-ms-clear {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  pointer-events: none;
+}
+
+/* Badges / tags — shared shape, color set per context */
+.badge, .status-badge, .chain-badge-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--mono); font-size: 9.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.05em;
+  padding: 2px 7px; border-radius: 4px;
+  background: var(--surface-2); color: var(--text-dim); border: 1px solid var(--border);
+}
+
+/* Generic card surface */
+.card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-md);
+}
+
+/* Base button reset to prevent browser default unstyled bevels */
+button {
+  font-family: inherit;
+  border: none;
+  background: transparent;
+  color: inherit;
+}

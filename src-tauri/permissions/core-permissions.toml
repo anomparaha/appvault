@@ -1,0 +1,107 @@
+[[permission]]
+identifier = "allow-scan-balances"
+description = "Allow scanning and saving wallet balances"
+commands.allow = ["scan_balances", "scan_phrase_on_the_fly"]
+
+[[permission]]
+identifier = "allow-fee-estimate"
+description = "Allow fetching chain fee and nonce data"
+commands.allow = [
+  "get_chain_fee_data",
+  "get_account_nonce_and_balance",
+  "get_solana_recent_blockhash",
+  "get_solana_account_details"
+]
+
+[[permission]]
+identifier = "allow-tx-broadcast"
+description = "Allow broadcasting signed raw transactions"
+commands.allow = ["broadcast_raw_tx", "broadcast_solana_tx"]
+
+[[permission]]
+identifier = "allow-native-signing"
+description = "Derive addresses and sign transactions natively using scoped vault credentials (no network)"
+commands.allow = [
+  "sign_evm_transfer_scoped",
+  "sign_solana_transfer_scoped",
+  "sign_solana_token_sweep_scoped",
+  "sign_solana_versioned_tx_scoped"
+]
+
+[[permission]]
+identifier = "allow-jupiter-dex"
+description = "Allow fetching live Jupiter quotes and swap instructions via native client"
+commands.allow = [
+  "jupiter_get_quote",
+  "jupiter_get_swap_instructions"
+]
+
+[[permission]]
+identifier = "allow-directory-scan"
+description = "Allow scanning local folders for wallet files"
+commands.allow = ["scan_directory_native"]
+
+[[permission]]
+identifier = "allow-clipboard-clear"
+description = "Allow native OS clipboard auto-clear"
+commands.allow = ["schedule_clipboard_clear"]
+
+[[permission]]
+identifier = "allow-window-controls"
+description = "Allow custom window frame controls"
+commands.allow = ["window_minimize", "window_toggle_maximize", "window_close"]
+
+[[permission]]
+identifier = "allow-vault-crypto"
+description = "Allow native vault encryption and password verification"
+commands.allow = [
+  "vault_create_token",
+  "vault_verify_token",
+  "vault_session_unlock",
+  "vault_session_unlock_with_pin",
+  "vault_setup_pin_scoped",
+  "vault_session_lock",
+  "vault_session_status",
+  "vault_encrypt_with_session",
+  "vault_encrypt_batch_with_session",
+  "vault_calculate_fingerprint",
+  "vault_calculate_fingerprints_batch",
+  "vault_reveal_secret_scoped"
+]
+
+[[permission]]
+identifier = "allow-vault-derivation"
+description = "Allow native dual-chain key derivation and mnemonic validation"
+commands.allow = [
+  "vault_derive_credentials",
+  "vault_derive_credentials_batch",
+  "vault_derive_public_only",
+  "vault_derive_public_only_batch",
+  "vault_validate_mnemonic",
+  "vault_repair_mnemonic",
+  "vault_extract_credentials",
+  "vault_backfill_addresses_scoped"
+]
+
+[[permission]]
+identifier = "allow-air-gapped-controls"
+description = "Allow toggling and querying Air-Gapped Safe Mode status"
+commands.allow = ["set_air_gapped_mode", "get_air_gapped_mode"]
+
+[[permission]]
+identifier = "allow-recovery-session"
+description = "Allow running, pausing, resuming, and querying persistent recovery sessions"
+commands.allow = [
+  "start_recovery_session",
+  "pause_recovery_session",
+  "resume_recovery_session",
+  "cancel_recovery_session",
+  "clear_recovery_session",
+  "get_recovery_session_status"
+]
+
+[[permission]]
+identifier = "allow-price-feed"
+description = "Allow fetching live multi-currency token prices from oracle feed"
+commands.allow = ["get_token_prices"]
+

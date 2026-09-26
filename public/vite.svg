@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <radialGradient id="bgGlow" cx="50%" cy="30%" r="70%">
+      <stop offset="0%" stop-color="#1e1e38" />
+      <stop offset="60%" stop-color="#0d0e17" />
+      <stop offset="100%" stop-color="#07070c" />
+    </radialGradient>
+
+    <linearGradient id="plurivexP" x1="100" y1="80" x2="400" y2="440" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#818cf8" />
+      <stop offset="35%" stop-color="#6366f1" />
+      <stop offset="70%" stop-color="#8b5cf6" />
+      <stop offset="100%" stop-color="#a855f7" />
+    </linearGradient>
+
+    <linearGradient id="plurivexSlash" x1="200" y1="200" x2="440" y2="440" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="50%" stop-color="#6366f1" />
+      <stop offset="100%" stop-color="#c084fc" />
+    </linearGradient>
+
+    <radialGradient id="coreGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="40%" stop-color="#c4b5fd" />
+      <stop offset="100%" stop-color="#818cf8" stop-opacity="0" />
+    </radialGradient>
+
+    <filter id="neonGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="12" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bgGlow)" />
+  <rect width="508" height="508" x="2" y="2" rx="110" fill="none" stroke="rgba(255,255,255,0.12)" stroke-width="2.5" />
+
+  <circle cx="256" cy="240" r="150" fill="#6366f1" opacity="0.22" filter="url(#neonGlow)" />
+
+  <path
+    d="M 140 110
+       C 140 93.4 153.4 80 170 80
+       L 300 80
+       C 371.8 80 430 138.2 430 210
+       C 430 281.8 371.8 340 300 340
+       L 215 340
+       L 215 402
+       C 215 418.6 201.6 432 185 432
+       L 170 432
+       C 153.4 432 140 418.6 140 402
+       Z
+       M 215 155
+       L 215 265
+       L 295 265
+       C 325.4 265 350 240.4 350 210
+       C 350 179.6 325.4 155 295 155
+       Z"
+    fill="url(#plurivexP)"
+    filter="url(#neonGlow)"
+  />
+
+  <path
+    d="M 235 240
+       L 385 410
+       C 395 422 412 423 423 412
+       L 435 400
+       C 445 389 444 372 432 360
+       L 295 205
+       Z"
+    fill="url(#plurivexSlash)"
+    opacity="0.95"
+  />
+
+  <circle cx="265" cy="210" r="26" fill="url(#coreGlow)" />
+  <circle cx="265" cy="210" r="10" fill="#ffffff" />
+</svg>

@@ -1,0 +1,47 @@
+[package]
+name = "plurivex"
+version = "0.1.7"
+description = "Plurivex - High-Performance Multi-Chain Security Vault & Recovery Suite"
+authors = ["Plurivex Labs"]
+edition = "2021"
+
+[lib]
+name = "plurivex_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-sql = { version = "2", features = ["sqlite"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+futures = "0.3"
+tokio = { version = "1", features = ["sync", "time", "macros", "rt"] }
+aes-gcm = "0.10"
+argon2 = "0.5"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+k256 = { version = "0.13", features = ["ecdsa"] }
+sha3 = "0.10"
+bip39 = { version = "2.0", features = ["all-languages", "zeroize"] }
+bip32 = "0.5"
+ed25519-dalek = "2.1"
+hex = "0.4"
+bs58 = "0.5"
+hmac = "0.12"
+ripemd = "0.1"
+bech32 = "0.9"
+rayon = "1.10"
+zeroize = { version = "1.9", features = ["alloc"] }
+

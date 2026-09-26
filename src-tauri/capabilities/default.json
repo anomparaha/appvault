@@ -1,0 +1,28 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "allow-vault-db",
+    "dialog:default",
+    "fs:default",
+    "fs:allow-write-text-file",
+    "allow-scan-balances",
+    "allow-fee-estimate",
+    "allow-tx-broadcast",
+    "allow-native-signing",
+    "allow-directory-scan",
+    "allow-clipboard-clear",
+    "allow-window-controls",
+    "allow-vault-crypto",
+    "allow-vault-derivation",
+    "allow-air-gapped-controls",
+    "allow-recovery-session",
+    "allow-price-feed",
+    "allow-updater-scoped",
+    "process:allow-restart"
+  ]
+}

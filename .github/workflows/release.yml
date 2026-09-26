@@ -1,0 +1,83 @@
+name: Release Pipeline
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release (${{ matrix.platform }})
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: ''
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      - name: Build Tauri App and Publish Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Plurivex ${{ github.ref_name }}'
+          releaseBody: 'Official release build for Plurivex ${{ github.ref_name }}. Verified with Minisign signatures.'
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}
+
+      - name: Prepare Public Release Artifacts & Updater JSON
+        shell: pwsh
+        run: |
+          if (Test-Path "latest.json") {
+            (Get-Content "latest.json") -replace "https://github.com/[^/]+/[^/]+", "https://github.com/anomparaha/appvault" | Set-Content "latest.json"
+          }
+
+      - name: Publish to Public Brand Repository (plurivexapp/plurivex-app)
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.PUBLIC_RELEASE_TOKEN }}
+          repository: plurivexapp/plurivex-app
+          tag_name: ${{ github.ref_name }}
+          name: 'Plurivex ${{ github.ref_name }}'
+          body: 'Official desktop release build for Plurivex ${{ github.ref_name }}. Verified with Minisign signatures.'
+          draft: false
+          prerelease: false
+          files: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/nsis/*.sig
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/msi/*.sig
+            latest.json
+

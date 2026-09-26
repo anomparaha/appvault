@@ -1,0 +1,8 @@
+[[permission]]
+identifier = "allow-updater-scoped"
+description = "Allow checking and installing signed application updates through native air-gap protected commands"
+commands.allow = [
+  "vault_updater_check",
+  "vault_updater_download_and_install"
+]
+
