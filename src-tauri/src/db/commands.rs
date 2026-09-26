@@ -1206,10 +1206,10 @@ mod tests {
 
     #[test]
     fn test_native_verify_master_password_flow() {
-        let mut conn = setup_in_memory_db();
+        let conn = setup_in_memory_db();
         let pw = "SecurePassword789!";
         let token = crate::core::security::crypto::create_verification_token(pw).unwrap();
-        db_save_master_password(&mut conn, &token).unwrap();
+        db_save_master_password(&conn, &token).unwrap();
 
         // Stored token matches password
         let stored_token = db_get_verification_token(&conn).unwrap().unwrap();
@@ -1219,10 +1219,10 @@ mod tests {
 
     #[test]
     fn test_verify_master_password_internal_and_delete_protection() {
-        let mut conn = setup_in_memory_db();
+        let conn = setup_in_memory_db();
         let pw = "SuperSecretVaultPw2026!";
         let token = crate::core::security::crypto::create_verification_token(pw).unwrap();
-        db_save_master_password(&mut conn, &token).unwrap();
+        db_save_master_password(&conn, &token).unwrap();
 
         // Valid password succeeds
         assert!(verify_master_password_internal(&conn, pw).is_ok());
