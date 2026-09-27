@@ -74,11 +74,10 @@ export function WalletHeader({
         </button>
         <button
           type="button"
-          className="workspace-tab disabled"
-          disabled
-          data-tooltip="Quick DEX Swap · Coming Soon"
+          className={`workspace-tab ${activeTab === "dex" ? "active" : ""}`}
+          onClick={() => setActiveTab("dex")}
         >
-          <IconRefresh size={13} /> Quick DEX Swap <span style={{ fontSize: "8px", padding: "1px 5px", borderRadius: "4px", background: "var(--surface-3)", color: "var(--text-dim)", marginLeft: "4px", border: "1px solid var(--border)" }}>SOON</span>
+          <IconRefresh size={13} /> Quick DEX Swap
         </button>
         <button
           type="button"

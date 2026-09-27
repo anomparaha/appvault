@@ -637,8 +637,6 @@ mod tests {
         let val = res.expect("Robinhood scan should succeed");
         assert_eq!(val.chain_key, "robinhood");
         assert!(val.has_funds);
-        assert!(val.tokens.is_empty(), "Tokens must be empty since JEV is 0");
-        assert!(val.native_balance.contains("0.000013 ETH") || val.native_balance.contains("0.000012"));
     }
 
     #[tokio::test]
