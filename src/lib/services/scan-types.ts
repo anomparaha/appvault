@@ -7,4 +7,5 @@ export interface ScanProgress {
   completed: number;
   funded: number;
   isScanning: boolean;
+  currentLabel?: string;
 }

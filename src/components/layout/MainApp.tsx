@@ -492,6 +492,11 @@ export function MainApp() {
             <div className="scan-progress-text">
               <span className="scan-progress-title">
                 Scanning Multi-Chain Balances ({scanProgress.completed}/{scanProgress.total})
+                {scanProgress.currentLabel && (
+                  <span style={{ fontWeight: 400, opacity: 0.75, marginLeft: 6, fontSize: "11px" }}>
+                    · {scanProgress.currentLabel}
+                  </span>
+                )}
               </span>
               <span className="scan-progress-stats">
                 {Math.round((scanProgress.completed / Math.max(scanProgress.total, 1)) * 100)}% completed · {scanProgress.funded} funded detected

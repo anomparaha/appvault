@@ -15,7 +15,7 @@ interface UseWalletScannerProps {
   enrich: (records: any[]) => WalletView[];
 }
 
-const SCAN_CHUNK_SIZE = 15;
+const SCAN_CHUNK_SIZE = 1;
 type ScanResult = { funded: number; errors: number };
 
 function chunksOf<T>(items: T[], size: number): T[][] {
@@ -117,6 +117,18 @@ export function useWalletScanner({
           const chunkIds = chunk.map((wallet) => wallet.id);
           setLoadingBalances(chunkIds);
 
+          const target = chunk[0];
+          const rawAddr = target?.label || target?.address || target?.solAddress || target?.btcAddress || `Wallet #${target?.id}`;
+          const currentLabel = rawAddr.length > 16 ? `${rawAddr.slice(0, 6)}...${rawAddr.slice(-4)}` : rawAddr;
+
+          setScanProgress({
+            total,
+            completed: Math.min(completed, total),
+            funded: totalFunded,
+            isScanning: true,
+            currentLabel,
+          });
+
           try {
             const summary = chunk.length === 1
               ? await rustScan(sessionToken, chunk[0].id, undefined, chainKey)
@@ -128,6 +140,7 @@ export function useWalletScanner({
           } catch (err) {
             console.error('Balance scan chunk failed:', err);
             totalErrors += 1;
+            completed += chunk.length;
           }
 
           setScanProgress({
@@ -135,6 +148,7 @@ export function useWalletScanner({
             completed: Math.min(completed, total),
             funded: totalFunded,
             isScanning: true,
+            currentLabel,
           });
         }
       } finally {
