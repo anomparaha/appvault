@@ -6,9 +6,11 @@ import {
   estimateWalletSweep,
   estimateTokenWalletSweep,
   estimateTokenDexSellSweep,
+  estimateTokenDexBuySweep,
   executeSweepSingle,
   executeTokenSweepSingle,
   executeTokenDexSellSingle,
+  executeTokenDexBuySingle,
   type WalletSweepEstimate,
   type SweepTxResult,
 } from "../../lib/services/sweeper";
@@ -51,7 +53,8 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
   const [selectedTokenMint, setSelectedTokenMint] = useState<string>("");
   const [customMintInput, setCustomMintInput] = useState<string>("");
   const [feePayerWalletId, setFeePayerWalletId] = useState<number | null>(null);
-  const [tokenAction, setTokenAction] = useState<"transfer" | "dex_sell">("dex_sell");
+  const [tokenAction, setTokenAction] = useState<"transfer" | "dex_sell" | "dex_buy">("dex_sell");
+  const [buyAmountSol, setBuyAmountSol] = useState<string>("0.05");
   const [slippageBps, setSlippageBps] = useState<number>(250);
   const [showWinRate, setShowWinRate] = useState<boolean>(false);
 
@@ -226,6 +229,15 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
                 feePayerWalletId ?? undefined,
                 slippageBps
               )
+            : tokenAction === "dex_buy"
+            ? await estimateTokenDexBuySweep(
+                w.id,
+                addr,
+                { mint: activeTokenMint, symbol: activeTokenInfo?.symbol || "TOKEN", decimals: activeTokenInfo?.decimals },
+                parseFloat(buyAmountSol) || 0.05,
+                feePayerWalletId ?? undefined,
+                slippageBps
+              )
             : await estimateTokenWalletSweep(
                 w.id,
                 addr,
@@ -257,9 +269,12 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
     return () => {
       active = false;
     };
-  }, [chainKey, gasPriceGwei, targetWallets, assetMode, activeTokenMint, feePayerWalletId, isEvmChain, activeTokenInfo, tokenAction, slippageBps]);
+  }, [chainKey, gasPriceGwei, targetWallets, assetMode, activeTokenMint, feePayerWalletId, isEvmChain, activeTokenInfo, tokenAction, buyAmountSol, slippageBps]);
 
-  const validRecipient = isEvmChain ? isEvmAddress(recipient.trim()) : isValidSolAddress(recipient);
+  const isRecipientRequired = !(chainKey === "sol" && assetMode === "token" && tokenAction === "dex_buy");
+  const validRecipient = !isRecipientRequired
+    ? (recipient.trim() === "" || isValidSolAddress(recipient.trim()))
+    : (isEvmChain ? isEvmAddress(recipient.trim()) : isValidSolAddress(recipient.trim()));
   const sweepableWallets = targetWallets.filter((w) => estimates[w.id]?.isSweepable);
   const totalNetFormatted = useMemo(() => {
     if (sweepableWallets.length === 0) {
@@ -276,6 +291,15 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
           return est ? acc + est.netWei : acc;
         }, 0n);
         return `~${(Number(totalLamports) / 1e9).toFixed(6)} SOL (Direct to Master)`;
+      } else if (tokenAction === "dex_buy") {
+        const decimals = activeTokenInfo?.decimals ?? 6;
+        const totalTokens = sweepableWallets.reduce((acc, w) => {
+          const est = estimates[w.id];
+          return est ? acc + est.netWei : acc;
+        }, 0n);
+        const factor = 10 ** decimals;
+        const fmt = (Number(totalTokens) / factor).toFixed(decimals > 6 ? 4 : 2);
+        return `~${fmt} ${activeTokenInfo?.symbol || "TOKEN"} (Total Bought)`;
       }
       const sym = activeTokenInfo?.symbol || "TOKEN";
       return `${sweepableWallets.length} Wallets (${sym})`;
@@ -297,7 +321,7 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
   }, [sweepableWallets, estimates, chainKey, assetMode, activeTokenInfo, activeChain]);
 
   const handleStartSweep = async () => {
-    if (!validRecipient) {
+    if (tokenAction !== "dex_buy" && !validRecipient) {
       toast(isEvmChain ? "Please enter a valid EVM recipient address (0x...)" : "Please enter a valid Solana Base58 recipient address", "error");
       return;
     }
@@ -306,11 +330,12 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
       return;
     }
     if (sweepableWallets.length === 0) {
-      toast("No sweepable wallets found for this network (balances are lower than gas fee)", "error");
+      toast("No eligible wallets found for this operation (balances are insufficient for gas or buy amount)", "error");
       return;
     }
 
     const isDexSell = chainKey === "sol" && assetMode === "token" && tokenAction === "dex_sell";
+    const isDexBuy = chainKey === "sol" && assetMode === "token" && tokenAction === "dex_buy";
     const confirmSweep = window.confirm(
       isDexSell
         ? `⚡ CONFIRM STEALTH DEX LIQUIDATION (ZERO-SOL SELL)\n\n` +
@@ -322,6 +347,16 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
           `Direct Recipient Address (Proceeds go 100% here):\n${recipient.trim()}\n\n` +
           `Sub-wallets do NOT need SOL and will NOT receive SOL. The entire SOL yield is delivered straight to the Recipient Address above.\n\n` +
           `Proceed with DEX swap broadcast?`
+        : isDexBuy
+        ? `🛒 CONFIRM BATCH DEX BUY (SOL -> TOKEN)\n\n` +
+          `Token to Buy: ${activeTokenInfo?.symbol || "SPL Token"} (Mint: ${shortAddr(activeTokenMint)})\n` +
+          `Wallets Participating: ${sweepableWallets.length}\n` +
+          `Buy Amount per Wallet: ${buyAmountSol} SOL\n` +
+          `Est. Total Output: ${totalNetFormatted}\n` +
+          `Slippage: ${(slippageBps / 100).toFixed(1)}%\n` +
+          `Gas Sponsor: ${feePayerWalletId ? "Single-Funder Active" : "Self-Funded"}\n\n` +
+          `Each participating wallet will swap ${buyAmountSol} SOL for ${activeTokenInfo?.symbol || "SPL Token"} via Jupiter DEX.\n\n` +
+          `Proceed with Jupiter Batch Buy?`
         : `⚠️ CONFIRM FUNDS SWEEP (BLOCKCHAIN BROADCAST)\n\n` +
           `Network: ${activeChain.name} (${chainKey === "sol" && assetMode === "token" ? `Token: ${activeTokenInfo?.symbol || "SPL Token"}` : activeChain.symbol})\n` +
           `Target Wallets: ${sweepableWallets.length}\n` +
@@ -331,7 +366,7 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
           `Are you sure you want to broadcast these sweep transactions? Transactions broadcast to blockchain networks cannot be reversed.`
     );
     if (!confirmSweep) {
-      toast("Sweep broadcast canceled", "info");
+      toast("Operation canceled", "info");
       return;
     }
 
@@ -379,6 +414,32 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
             },
             slippageBps
           );
+        } else if (tokenAction === "dex_buy") {
+          setSweepProgress({
+            current: i + 1,
+            total: sweepableWallets.length,
+            msg: `Buying ${tokenSym} with ${buyAmountSol} SOL on wallet ${shortAddr(fromAddr)}...`,
+          });
+
+          const feePayerAddr = feePayerWalletId
+            ? wallets.find((x) => x.id === feePayerWalletId)?.solAddress || fromAddr
+            : fromAddr;
+
+          res = await executeTokenDexBuySingle(
+            w.id,
+            sessionToken,
+            feePayerWalletId ?? undefined,
+            feePayerAddr,
+            fromAddr,
+            {
+              mint: activeTokenMint,
+              symbol: tokenSym,
+              decimals: activeTokenInfo?.decimals ?? 6,
+            },
+            parseFloat(buyAmountSol) || 0.05,
+            recipient.trim() || undefined,
+            slippageBps
+          );
         } else {
           setSweepProgress({
             current: i + 1,
@@ -407,32 +468,47 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
         results[w.id] = res;
         if (res.success) {
           successCount++;
-          optimisticClearSweptWalletBalance(w.id, "sol", activeTokenMint, tokenSym);
-          setEstimates((prev) => {
-            const next = { ...prev };
-            delete next[w.id];
-            return next;
-          });
-          logActivity({
-            type: "sweep",
-            title: tokenAction === "dex_sell" ? `Stealth DEX Liquidated ${tokenSym} to SOL` : `Swept ${tokenSym} to Cold Storage`,
-            desc: tokenAction === "dex_sell"
-              ? `Sold on DEX with 0 SOL on sender; proceeds delivered direct to ${shortAddr(recipient.trim())} ${feePayerWalletId && feePayerWalletId !== w.id ? "(Gas Sponsored)" : ""}`
-              : `Transferred from ${shortAddr(fromAddr)} to ${shortAddr(recipient.trim())} ${feePayerWalletId && feePayerWalletId !== w.id ? "(Gas Sponsored)" : ""}`,
-            amount: res.amountSent,
-            amountColor: "var(--ok)",
-            status: "success",
-            chain: "sol",
-            txHash: res.txHash,
-            explorerUrl: res.explorerUrl,
-            recipient: recipient.trim(),
-            sender: fromAddr,
-          });
+          if (tokenAction === "dex_buy") {
+            logActivity({
+              type: "trade",
+              title: `DEX Bought ${tokenSym}`,
+              desc: `Purchased with ${buyAmountSol} SOL on wallet ${shortAddr(fromAddr)} ${feePayerWalletId && feePayerWalletId !== w.id ? "(Gas Sponsored)" : ""}`,
+              amount: res.amountSent,
+              amountColor: "var(--ok)",
+              status: "success",
+              chain: "sol",
+              txHash: res.txHash,
+              explorerUrl: res.explorerUrl,
+              sender: fromAddr,
+            });
+          } else {
+            optimisticClearSweptWalletBalance(w.id, "sol", activeTokenMint, tokenSym);
+            setEstimates((prev) => {
+              const next = { ...prev };
+              delete next[w.id];
+              return next;
+            });
+            logActivity({
+              type: "sweep",
+              title: tokenAction === "dex_sell" ? `Stealth DEX Liquidated ${tokenSym} to SOL` : `Swept ${tokenSym} to Cold Storage`,
+              desc: tokenAction === "dex_sell"
+                ? `Sold on DEX with 0 SOL on sender; proceeds delivered direct to ${shortAddr(recipient.trim())} ${feePayerWalletId && feePayerWalletId !== w.id ? "(Gas Sponsored)" : ""}`
+                : `Transferred from ${shortAddr(fromAddr)} to ${shortAddr(recipient.trim())} ${feePayerWalletId && feePayerWalletId !== w.id ? "(Gas Sponsored)" : ""}`,
+              amount: res.amountSent,
+              amountColor: "var(--ok)",
+              status: "success",
+              chain: "sol",
+              txHash: res.txHash,
+              explorerUrl: res.explorerUrl,
+              recipient: recipient.trim(),
+              sender: fromAddr,
+            });
+          }
         } else {
           failCount++;
           logActivity({
-            type: "sweep",
-            title: tokenAction === "dex_sell" ? `DEX Liquidation Failed (${tokenSym})` : `Sweep Failed (${tokenSym})`,
+            type: tokenAction === "dex_buy" ? "trade" : "sweep",
+            title: tokenAction === "dex_buy" ? `DEX Buy Failed (${tokenSym})` : tokenAction === "dex_sell" ? `DEX Liquidation Failed (${tokenSym})` : `Sweep Failed (${tokenSym})`,
             desc: res.error || `Broadcast failed for ${shortAddr(fromAddr)}`,
             amount: "Failed",
             amountColor: "var(--danger)",
@@ -503,7 +579,12 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
     setSweepProgress(null);
 
     if (successCount > 0) {
-      toast(`Successfully swept funds from ${successCount} wallets!`, "success");
+      toast(
+        tokenAction === "dex_buy"
+          ? `Successfully purchased ${activeTokenInfo?.symbol || "tokens"} across ${successCount} wallets!`
+          : `Successfully swept funds from ${successCount} wallets!`,
+        "success"
+      );
       // Delayed background re-scan to guarantee on-chain block settlement
       setTimeout(() => {
         scanAll();
@@ -672,7 +753,7 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
               {assetMode === "token" && (
                 <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 10, width: "100%", flexWrap: "wrap", padding: "8px 12px", background: "rgba(255,255,255,0.02)", borderRadius: "6px", border: "1px solid var(--border-subtle, rgba(255,255,255,0.06))" }}>
                   <span style={{ fontSize: "11px", fontWeight: 700, color: "var(--text-dim)", textTransform: "uppercase" }}>Action Mode:</span>
-                  <div style={{ display: "flex", gap: 6 }}>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     <button
                       type="button"
                       className={`network-pill-btn ${tokenAction === "transfer" ? "active" : ""}`}
@@ -698,33 +779,96 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
                         gap: 5,
                       }}
                     >
-                      <IconZap size={13} /> Stealth DEX Sell (Jual Jadi SOL Langsung ke Master)
+                      <IconZap size={13} /> Stealth DEX Sell (Jual Jadi SOL)
+                    </button>
+                    <button
+                      type="button"
+                      className={`network-pill-btn ${tokenAction === "dex_buy" ? "active" : ""}`}
+                      onClick={() => setTokenAction("dex_buy")}
+                      style={{
+                        padding: "4px 12px",
+                        fontSize: "11px",
+                        height: "auto",
+                        background: tokenAction === "dex_buy" ? "rgba(59,130,246,0.25)" : undefined,
+                        borderColor: tokenAction === "dex_buy" ? "#3b82f6" : undefined,
+                        color: tokenAction === "dex_buy" ? "#60a5fa" : undefined,
+                        fontWeight: 700,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 5,
+                      }}
+                    >
+                      <span style={{ fontSize: "12px" }}>🛒</span> Batch DEX Buy (Beli Pakai SOL Tiap Dompet)
                     </button>
                   </div>
 
-                  {tokenAction === "dex_sell" && (
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: "auto" }}>
-                      <span style={{ fontSize: "11px", color: "var(--text-dim)" }}>Slippage:</span>
-                      <select
-                        className="deck-input-field mono"
-                        value={slippageBps}
-                        onChange={(e) => setSlippageBps(Number(e.target.value))}
-                        style={{
-                          padding: "3px 8px",
-                          fontSize: "11px",
-                          borderRadius: 4,
-                          background: "var(--bg-card, #131722)",
-                          border: "1px solid var(--border, #2a2e39)",
-                          color: "var(--fg, #fff)",
-                          cursor: "pointer",
-                        }}
-                      >
-                        <option value={100}>1.0%</option>
-                        <option value={200}>2.0%</option>
-                        <option value={250}>2.5% (Recommended)</option>
-                        <option value={350}>3.5%</option>
-                        <option value={500}>5.0%</option>
-                      </select>
+                  {(tokenAction === "dex_sell" || tokenAction === "dex_buy") && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginLeft: "auto", flexWrap: "wrap" }}>
+                      {tokenAction === "dex_buy" && (
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ fontSize: "11px", color: "var(--text-dim)" }}>SOL per Wallet:</span>
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0.001"
+                            className="deck-input-field mono"
+                            style={{
+                              padding: "3px 8px",
+                              fontSize: "11px",
+                              borderRadius: 4,
+                              background: "var(--bg-card, #131722)",
+                              border: "1px solid var(--border, #2a2e39)",
+                              color: "var(--fg, #fff)",
+                              width: 70,
+                            }}
+                            value={buyAmountSol}
+                            onChange={(e) => setBuyAmountSol(e.target.value)}
+                          />
+                          <div style={{ display: "flex", gap: 3 }}>
+                            {["0.01", "0.05", "0.1", "0.5"].map((preset) => (
+                              <button
+                                key={preset}
+                                type="button"
+                                style={{
+                                  padding: "2px 6px",
+                                  fontSize: "10px",
+                                  borderRadius: 3,
+                                  background: buyAmountSol === preset ? "#3b82f6" : "rgba(255,255,255,0.08)",
+                                  color: buyAmountSol === preset ? "#fff" : "var(--muted)",
+                                  border: "none",
+                                  cursor: "pointer",
+                                }}
+                                onClick={() => setBuyAmountSol(preset)}
+                              >
+                                {preset}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                        <span style={{ fontSize: "11px", color: "var(--text-dim)" }}>Slippage:</span>
+                        <select
+                          className="deck-input-field mono"
+                          value={slippageBps}
+                          onChange={(e) => setSlippageBps(Number(e.target.value))}
+                          style={{
+                            padding: "3px 8px",
+                            fontSize: "11px",
+                            borderRadius: 4,
+                            background: "var(--bg-card, #131722)",
+                            border: "1px solid var(--border, #2a2e39)",
+                            color: "var(--fg, #fff)",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <option value={100}>1.0%</option>
+                          <option value={200}>2.0%</option>
+                          <option value={250}>2.5% (Recommended)</option>
+                          <option value={350}>3.5%</option>
+                          <option value={500}>5.0%</option>
+                        </select>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -738,8 +882,14 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
           {/* Recipient Vault Input */}
           <div className="sweeper-deck-col col-recipient">
             <div className="deck-col-header">
-              <span className="deck-col-label">2. MASTER RECIPIENT ADDRESS</span>
-              {recipient ? (
+              <span className="deck-col-label">
+                {tokenAction === "dex_buy" ? "2. DESTINATION WALLET (OPTIONAL)" : "2. MASTER RECIPIENT ADDRESS"}
+              </span>
+              {tokenAction === "dex_buy" && !recipient ? (
+                <span className="deck-val-badge valid" style={{ background: "rgba(59,130,246,0.15)", color: "#60a5fa", borderColor: "rgba(59,130,246,0.3)" }}>
+                  Each Sub-Wallet ATA (Default)
+                </span>
+              ) : recipient ? (
                 <span className={`deck-val-badge ${validRecipient ? "valid" : "invalid"}`}>
                   {validRecipient ? (isEvmChain ? "Valid EVM Address" : "Valid Solana Address") : (isEvmChain ? "Invalid 0x Address" : "Invalid Solana Address")}
                 </span>
@@ -751,7 +901,13 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
               <input
                 type="text"
                 className="deck-input-field mono"
-                placeholder={isEvmChain ? "Paste recipient 0x address (e.g. from Binance, OKX, Ledger, Safe)" : "Paste recipient Solana address (e.g. from Phantom, Backpack, Binance)"}
+                placeholder={
+                  tokenAction === "dex_buy"
+                    ? "Leave blank to keep tokens in each sub-wallet, or paste custom recipient address"
+                    : isEvmChain
+                    ? "Paste recipient 0x address (e.g. from Binance, OKX, Ledger, Safe)"
+                    : "Paste recipient Solana address (e.g. from Phantom, Backpack, Binance)"
+                }
                 value={recipient}
                 onChange={(e) => setRecipient(e.target.value)}
                 disabled={sweeping}
@@ -973,9 +1129,15 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
                 <tr>
                   <th style={{ width: 54, textAlign: "center" }}>#</th>
                   <th>Wallet Address</th>
-                  <th>Gross Balance</th>
+                  <th>{tokenAction === "dex_buy" ? "SOL Balance" : "Gross Balance"}</th>
                   <th>Estimated Gas</th>
-                  <th>{chainKey === "sol" && assetMode === "token" && tokenAction === "dex_sell" ? "Est. Net SOL to Master" : "Net Yield to Master"}</th>
+                  <th>
+                    {chainKey === "sol" && assetMode === "token" && tokenAction === "dex_sell"
+                      ? "Est. Net SOL to Master"
+                      : chainKey === "sol" && assetMode === "token" && tokenAction === "dex_buy"
+                      ? `Est. ${activeTokenInfo?.symbol || "Tokens"} Received`
+                      : "Net Yield to Master"}
+                  </th>
                   <th>Status</th>
                 </tr>
               </thead>
@@ -996,20 +1158,39 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
                         <span className="wallet-addr mono">{getWalletTargetAddr(w, isEvmChain) ? shortAddr(getWalletTargetAddr(w, isEvmChain)) : "invalid"}</span>
                       </td>
                       <td className="mono">
-                        {res?.success ? <span style={{ color: "#34d399" }}>0 (Sold ✓)</span> : (est ? formatCompactBalance(est.balanceFormatted) : "…")}
+                        {res?.success ? (
+                          <span style={{ color: "#34d399" }}>{tokenAction === "dex_buy" ? "Bought ✓" : "0 (Sold ✓)"}</span>
+                        ) : est ? (
+                          formatCompactBalance(est.balanceFormatted)
+                        ) : (
+                          "…"
+                        )}
                       </td>
                       <td className="mono text-muted">{est ? formatCompactBalance(est.feeFormatted) : "…"}</td>
                       <td className="mono bold text-emerald">
                         {res?.success ? (
-                          <span style={{ color: "#34d399" }}>+{res.amountSent?.split("→ +")[1] || "SOL Received ✓"}</span>
+                          <span style={{ color: "#34d399" }}>
+                            +{res.amountSent?.split("→ +")[1] || (tokenAction === "dex_buy" ? `${activeTokenInfo?.symbol || "Tokens"} Received ✓` : "SOL Received ✓")}
+                          </span>
                         ) : est ? (
-                          est.isSweepable ? formatCompactBalance(est.netFormatted) : "0 (Dust < Gas)"
-                        ) : "…"}
+                          est.isSweepable ? (
+                            formatCompactBalance(est.netFormatted)
+                          ) : tokenAction === "dex_buy" ? (
+                            <span style={{ color: "var(--muted)", fontWeight: 400 }}>0 (Needs {buyAmountSol} SOL)</span>
+                          ) : (
+                            "0 (Dust < Gas)"
+                          )
+                        ) : (
+                          "…"
+                        )}
                       </td>
                       <td>
                         {res ? (
                           res.success ? (
-                            <span className="status-badge success" data-tooltip={res.txHash}><IconCheckCircle size={10} /> {tokenAction === "dex_sell" && chainKey === "sol" && assetMode === "token" ? "Liquidated" : "Swept"}</span>
+                            <span className="status-badge success" data-tooltip={res.txHash}>
+                              <IconCheckCircle size={10} />{" "}
+                              {tokenAction === "dex_buy" ? "Bought" : tokenAction === "dex_sell" && chainKey === "sol" && assetMode === "token" ? "Liquidated" : "Swept"}
+                            </span>
                           ) : (
                             <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
                               <span className="status-badge error" data-tooltip={res.error} title={res.error}><IconAlertTriangle size={10} /> Failed</span>
@@ -1021,8 +1202,8 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
                             </div>
                           )
                         ) : est?.isSweepable ? (
-                          <span className="status-badge ready">
-                            {est.isSponsored ? "Ready (Sponsored)" : "Ready"}
+                          <span className="status-badge ready" style={tokenAction === "dex_buy" ? { background: "rgba(59,130,246,0.15)", color: "#60a5fa", borderColor: "rgba(59,130,246,0.3)" } : undefined}>
+                            {est.isSponsored ? "Ready to Buy (Sponsored)" : "Ready to Buy"}
                           </span>
                         ) : (
                           <span className="status-badge dust" data-tooltip={est?.statusText}>{est?.statusText || "Insufficient Gas"}</span>
@@ -1041,11 +1222,15 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
       <div className="sweeper-execute-dock">
         <div className="dock-summary">
           <div className="dock-stat">
-            <span className="dock-lbl">{tokenAction === "dex_sell" && chainKey === "sol" && assetMode === "token" ? "Liquidatable Wallets:" : "Sweepable Wallets:"}</span>
+            <span className="dock-lbl">
+              {tokenAction === "dex_buy" ? "Eligible Buyer Wallets:" : tokenAction === "dex_sell" && chainKey === "sol" && assetMode === "token" ? "Liquidatable Wallets:" : "Sweepable Wallets:"}
+            </span>
             <span className="dock-val mono text-emerald">{sweepableWallets.length} of {targetWallets.length}</span>
           </div>
           <div className="dock-stat">
-            <span className="dock-lbl">Total Net to Master:</span>
+            <span className="dock-lbl">
+              {tokenAction === "dex_buy" ? `Total Est. ${activeTokenInfo?.symbol || "Tokens"}:` : "Total Net to Master:"}
+            </span>
             <span className="dock-val mono bold text-emerald">{totalNetFormatted}</span>
           </div>
         </div>
@@ -1055,19 +1240,33 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
           className="btn-start-sweep"
           onClick={handleStartSweep}
           disabled={sweeping || sweepableWallets.length === 0 || !validRecipient}
-          style={tokenAction === "dex_sell" && chainKey === "sol" && assetMode === "token" ? {
-            background: "linear-gradient(135deg, #059669 0%, #10b981 100%)",
-            borderColor: "#34d399",
-            boxShadow: "0 4px 14px rgba(16, 185, 129, 0.3)",
-          } : undefined}
+          style={
+            tokenAction === "dex_buy"
+              ? {
+                  background: "linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)",
+                  borderColor: "#60a5fa",
+                  boxShadow: "0 4px 14px rgba(37, 99, 235, 0.3)",
+                }
+              : tokenAction === "dex_sell" && chainKey === "sol" && assetMode === "token"
+              ? {
+                  background: "linear-gradient(135deg, #059669 0%, #10b981 100%)",
+                  borderColor: "#34d399",
+                  boxShadow: "0 4px 14px rgba(16, 185, 129, 0.3)",
+                }
+              : undefined
+          }
         >
           {sweeping
-            ? (tokenAction === "dex_sell" && chainKey === "sol" && assetMode === "token"
-                ? `Liquidating on DEX (${sweepProgress?.current || 0}/${sweepProgress?.total || 0})…`
-                : `Sweeping (${sweepProgress?.current || 0}/${sweepProgress?.total || 0})…`)
+            ? tokenAction === "dex_buy"
+              ? `Buying on DEX (${sweepProgress?.current || 0}/${sweepProgress?.total || 0})…`
+              : tokenAction === "dex_sell" && chainKey === "sol" && assetMode === "token"
+              ? `Liquidating on DEX (${sweepProgress?.current || 0}/${sweepProgress?.total || 0})…`
+              : `Sweeping (${sweepProgress?.current || 0}/${sweepProgress?.total || 0})…`
+            : tokenAction === "dex_buy"
+            ? <><IconZap size={14} /> Execute Batch DEX Buy ({sweepableWallets.length} Wallets)</>
             : tokenAction === "dex_sell" && chainKey === "sol" && assetMode === "token"
-              ? <><IconZap size={14} /> Execute Stealth DEX Sell ({sweepableWallets.length} Wallets)</>
-              : <><IconZap size={14} /> Execute {chainKey === "sol" && assetMode === "token" ? `${activeTokenInfo?.symbol || "Token"} ` : ""}Sweep ({sweepableWallets.length} Wallets)</>}
+            ? <><IconZap size={14} /> Execute Stealth DEX Sell ({sweepableWallets.length} Wallets)</>
+            : <><IconZap size={14} /> Execute {chainKey === "sol" && assetMode === "token" ? `${activeTokenInfo?.symbol || "Token"} ` : ""}Sweep ({sweepableWallets.length} Wallets)</>}
         </button>
       </div>
     </div>

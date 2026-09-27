@@ -1,4 +1,4 @@
-export type ActivityType = "sweep" | "scan" | "import" | "security" | "export";
+export type ActivityType = "sweep" | "scan" | "import" | "security" | "export" | "trade";
 export type ActivityStatus = "success" | "failed" | "info" | "warning";
 
 export interface ActivityRecord {

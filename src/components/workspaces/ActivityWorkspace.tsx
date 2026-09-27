@@ -9,7 +9,6 @@ import {
   exportActivitiesCsv,
   exportActivitiesJson,
   type ActivityRecord,
-  type ActivityType,
 } from "../../lib/services/activity";
 import {
   IconSearch,
@@ -20,6 +19,7 @@ import {
   IconExport,
   IconTrash,
   IconWallet,
+  IconTrendingUp,
   ChainIcon,
 } from "../../icons";
 import { WinRateCard } from "../analytics/WinRateCard";
@@ -45,17 +45,18 @@ export function ActivityWorkspace({ onBack, onOpenSweeper }: ActivityWorkspacePr
   }, []);
 
   const counts = useMemo(() => {
-    const res = {
+    const res: Record<string, number> = {
       all: activities.length,
       sweep: 0,
       scan: 0,
       import: 0,
       security: 0,
       export: 0,
+      trade: 0,
     };
     for (const a of activities) {
       if (a.type in res) {
-        res[a.type as ActivityType]++;
+        res[a.type]++;
       }
     }
     return res;
@@ -280,6 +281,13 @@ export function ActivityWorkspace({ onBack, onOpenSweeper }: ActivityWorkspacePr
           </button>
           <button
             type="button"
+            className={`btn-filter-pill ${filterType === "trade" ? "active" : ""}`}
+            onClick={() => setFilterType("trade")}
+          >
+            Trades ({counts.trade})
+          </button>
+          <button
+            type="button"
             className={`btn-filter-pill ${filterType === "scan" ? "active" : ""}`}
             onClick={() => setFilterType("scan")}
           >
@@ -388,6 +396,8 @@ export function ActivityWorkspace({ onBack, onOpenSweeper }: ActivityWorkspacePr
                           ? "rgba(239, 68, 68, 0.12)"
                           : item.type === "sweep"
                           ? "rgba(204, 255, 0, 0.12)"
+                          : item.type === "trade"
+                          ? "rgba(59, 130, 246, 0.15)"
                           : item.type === "security"
                           ? "rgba(59, 130, 246, 0.12)"
                           : item.type === "scan"
@@ -398,6 +408,8 @@ export function ActivityWorkspace({ onBack, onOpenSweeper }: ActivityWorkspacePr
                           ? "var(--danger)"
                           : item.type === "sweep"
                           ? "var(--accent)"
+                          : item.type === "trade"
+                          ? "#60a5fa"
                           : item.type === "security"
                           ? "#60a5fa"
                           : item.type === "scan"
@@ -409,6 +421,8 @@ export function ActivityWorkspace({ onBack, onOpenSweeper }: ActivityWorkspacePr
                   >
                     {item.type === "sweep" ? (
                       <IconZap size={16} />
+                    ) : item.type === "trade" ? (
+                      <IconTrendingUp size={16} />
                     ) : item.type === "security" ? (
                       <IconShield size={16} />
                     ) : item.type === "scan" ? (

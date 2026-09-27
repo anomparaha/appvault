@@ -235,3 +235,125 @@ export async function buildStealthDexSellMessage(
     rawOutLamports: quote.outAmount,
   };
 }
+
+/**
+ * Builds a DEX Buy Versioned Message (SOL -> Target Token):
+ * 1. userPublicKey is the sub-wallet (pays SOL, receives token into ATA).
+ * 2. payer is the fee payer wallet (sponsors gas and signature fees, or userPublicKey if self-paying).
+ * 3. destinationTokenAccount is optional (if provided, token goes to recipient's ATA; otherwise sub-wallet's ATA).
+ */
+export async function buildDexBuyMessage(
+  quote: JupiterQuoteResponse,
+  buyerWalletAddress: string,
+  feePayerAddress: string,
+  destinationAta?: string,
+  rpcUrl: string = "https://mainnet.helius-rpc.com/?api-key=f0adee34-1df4-45c6-b897-b93f4cad01c9",
+): Promise<{ messageBase64: string; estimatedTokensOut: string; rawOutTokens: string }> {
+  let instructionsData: SwapInstructionsResponse | null = null;
+  let lastErr = "Failed to fetch swap-instructions";
+
+  const cleanedQuote = { ...quote };
+  delete (cleanedQuote as any).platformFee;
+
+  const swapPayloadObj: any = {
+    quoteResponse: cleanedQuote,
+    userPublicKey: buyerWalletAddress,
+    payer: feePayerAddress,
+    wrapAndUnwrapSol: true,
+  };
+  if (destinationAta) {
+    swapPayloadObj.destinationTokenAccount = destinationAta;
+  }
+  const swapPayload = JSON.stringify(swapPayloadObj);
+
+  // 1. Try native Rust command first (immune to webview CORS / CSP blocks)
+  try {
+    const raw = await invoke<string>("jupiter_get_swap_instructions", {
+      payloadJson: swapPayload,
+    });
+    const parsed: SwapInstructionsResponse = JSON.parse(raw);
+    if (!parsed.error) {
+      instructionsData = parsed;
+    }
+  } catch (_nativeErr) {
+    // Fall back to web fetch
+  }
+
+  // 2. Web fetch fallback
+  if (!instructionsData) {
+    for (const base of JUPITER_API_ENDPOINTS) {
+      try {
+        const res = await fetch(`${base}/swap-instructions`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: swapPayload,
+        });
+
+        if (!res.ok) {
+          lastErr = `Jupiter swap-instructions error (${res.status}): ${await res.text()}`;
+          continue;
+        }
+
+        const data: SwapInstructionsResponse = await res.json();
+        if (data.error) {
+          lastErr = data.error;
+          continue;
+        }
+
+        instructionsData = data;
+        break;
+      } catch (err) {
+        lastErr = String(err);
+      }
+    }
+  }
+
+  if (!instructionsData) {
+    throw new Error(lastErr);
+  }
+
+  const allIxs: TransactionInstruction[] = [
+    ...(instructionsData.computeBudgetInstructions || []).map(deserializeInstruction),
+    ...(instructionsData.setupInstructions || []).map(deserializeInstruction),
+    deserializeInstruction(instructionsData.swapInstruction),
+    ...(instructionsData.cleanupInstruction ? [deserializeInstruction(instructionsData.cleanupInstruction)] : []),
+  ];
+
+  const connection = new Connection(rpcUrl, "confirmed");
+
+  // Fetch address lookup table accounts
+  const altAddresses = instructionsData.addressLookupTableAddresses || [];
+  const altAccounts = await Promise.all(
+    altAddresses.map(async (addr) => {
+      try {
+        const res = await connection.getAddressLookupTable(new PublicKey(addr));
+        return res.value;
+      } catch {
+        return null;
+      }
+    }),
+  );
+
+  let blockhash: string;
+  try {
+    blockhash = (await connection.getLatestBlockhash("confirmed")).blockhash;
+  } catch (_bhErr) {
+    blockhash = await invoke<string>("get_solana_recent_blockhash");
+  }
+
+  const msgV0 = new TransactionMessage({
+    payerKey: new PublicKey(feePayerAddress),
+    recentBlockhash: blockhash,
+    instructions: allIxs,
+  }).compileToV0Message(altAccounts.filter((x): x is AddressLookupTableAccount => x !== null));
+
+  const serialized = msgV0.serialize();
+  const messageBase64 = Buffer.from(serialized).toString("base64");
+
+  return {
+    messageBase64,
+    estimatedTokensOut: quote.outAmount,
+    rawOutTokens: quote.outAmount,
+  };
+}
+

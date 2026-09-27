@@ -114,16 +114,15 @@ export function Sidebar({
 
         <button
           type="button"
-          className="nav-itm disabled"
-          disabled
-          data-tooltip="DEX Batch Trader · Coming Soon"
+          className={`nav-itm ${activeNav === "trader" ? "active" : ""}`}
+          onClick={() => setActiveNav?.("trader")}
+          data-tooltip={isCollapsed ? "DEX Batch Trader (Buy & Sell)" : undefined}
           data-tooltip-pos="right"
         >
           <svg className="nic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
             <path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/>
           </svg>
           <span>DEX Trader</span>
-          <span className="nav-badge soon">SOON</span>
         </button>
 
         <div className="nav-label">Security &amp; Network</div>

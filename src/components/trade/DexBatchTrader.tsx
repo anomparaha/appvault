@@ -3,16 +3,170 @@ import { useApp } from "../../context/AppContext";
 import { ChainIcon, IconTrendingUp, IconTrendingDown, IconTarget, IconZap } from "../../icons";
 import type { WalletView } from "../../lib/types/index";
 import { OFFICIAL_TOKEN_SPEC } from "../../services/officialTokenService";
+import { executeTokenDexBuySingle, executeTokenDexSellSingle } from "../../lib/services/sweeper";
+import { logActivity } from "../../lib/services/activity";
+import { shortAddr } from "../../lib/wallets/wallet";
+import { isValidSolAddress } from "../../lib/utils/format";
 
 export function DexBatchTrader({ wallet: _wallet }: { wallet?: WalletView }) {
-  const { selectedSweepIds } = useApp();
-  const [selectedChain, setSelectedChain] = useState<"eth" | "robinhood" | "base" | "arb" | "bsc" | "sol">("eth");
+  const { wallets, selectedSweepIds, sessionToken, scanAll, toast } = useApp();
+  const [selectedChain, setSelectedChain] = useState<"eth" | "robinhood" | "base" | "arb" | "bsc" | "sol">("sol");
   const [tokenAddress, setTokenAddress] = useState("");
   const [tradeAction, setTradeAction] = useState<"buy" | "sell">("buy");
   const [amountPerWallet, setAmountPerWallet] = useState("0.05");
-  const [slippage, setSlippage] = useState("1.0");
+  const [slippage, setSlippage] = useState("2.5");
   const [traderMode, setTraderMode] = useState<"distributed" | "sweep">("distributed");
-  const activeWalletsCount = selectedSweepIds.size > 0 ? selectedSweepIds.size : 1;
+  const [executing, setExecuting] = useState(false);
+  const [progressMsg, setProgressMsg] = useState<string | null>(null);
+
+  const solWallets = wallets.filter((w) => !!w.solAddress);
+  const targetWallets = selectedSweepIds.size > 0
+    ? wallets.filter((w) => selectedSweepIds.has(w.id) && (selectedChain === "sol" ? !!w.solAddress : !!w.address))
+    : (selectedChain === "sol" ? solWallets : wallets.filter((w) => !!w.address));
+
+  const activeWalletsCount = targetWallets.length;
+  const isSolana = selectedChain === "sol";
+
+  const handleExecute = async () => {
+    if (!isSolana) {
+      toast("DEX router for EVM networks is currently in development", "info");
+      return;
+    }
+
+    const mint = tokenAddress.trim();
+    if (!mint || !isValidSolAddress(mint)) {
+      toast("Please enter a valid Solana SPL token mint address", "error");
+      return;
+    }
+
+    const amountNum = parseFloat(amountPerWallet);
+    if (!amountNum || amountNum <= 0) {
+      toast("Please enter a valid amount per wallet", "error");
+      return;
+    }
+
+    if (targetWallets.length === 0) {
+      toast("No eligible Solana wallets found for trading", "error");
+      return;
+    }
+
+    const slippageBps = Math.round((parseFloat(slippage) || 2.5) * 100);
+
+    const confirmed = window.confirm(
+      `🛒 CONFIRM BATCH ${tradeAction.toUpperCase()} (JUPITER ROUTER)\n\n` +
+      `Token Mint: ${shortAddr(mint)}\n` +
+      `Wallets: ${targetWallets.length}\n` +
+      `${tradeAction === "buy" ? `Amount per Wallet: ${amountNum} SOL` : "Action: Liquidate token to SOL"}\n` +
+      `Slippage: ${(slippageBps / 100).toFixed(1)}%\n\n` +
+      `Proceed with parallel DEX swaps?`
+    );
+    if (!confirmed) return;
+
+    setExecuting(true);
+    let successCount = 0;
+    let failCount = 0;
+
+    for (let i = 0; i < targetWallets.length; i++) {
+      const w = targetWallets[i];
+      const fromAddr = w.solAddress!;
+      setProgressMsg(`Executing ${tradeAction} (${i + 1}/${targetWallets.length}) on ${shortAddr(fromAddr)}...`);
+
+      try {
+        if (tradeAction === "buy") {
+          const res = await executeTokenDexBuySingle(
+            w.id,
+            sessionToken,
+            undefined,
+            fromAddr,
+            fromAddr,
+            { mint, symbol: "TOKEN" },
+            amountNum,
+            undefined,
+            slippageBps
+          );
+
+          if (res.success) {
+            successCount++;
+            logActivity({
+              type: "trade",
+              title: `DEX Bought Tokens`,
+              desc: `Bought on wallet ${shortAddr(fromAddr)} with ${amountNum} SOL via Jupiter`,
+              amount: res.amountSent,
+              amountColor: "var(--ok)",
+              status: "success",
+              chain: "sol",
+              txHash: res.txHash,
+              explorerUrl: res.explorerUrl,
+              sender: fromAddr,
+            });
+          } else {
+            failCount++;
+            logActivity({
+              type: "trade",
+              title: `DEX Buy Failed`,
+              desc: res.error || `Failed on wallet ${shortAddr(fromAddr)}`,
+              amount: "Failed",
+              amountColor: "var(--danger)",
+              status: "failed",
+              chain: "sol",
+              sender: fromAddr,
+            });
+          }
+        } else {
+          const tok = w.tokens?.find((t) => t.contractAddress === mint);
+          const rawBal = tok?.rawBalance || "0";
+          const res = await executeTokenDexSellSingle(
+            w.id,
+            sessionToken,
+            undefined,
+            fromAddr,
+            fromAddr,
+            fromAddr,
+            {
+              mint,
+              symbol: tok?.symbol || "TOKEN",
+              name: tok?.name || "SPL Token",
+              decimals: tok?.decimals ?? 6,
+              rawBalance: rawBal,
+              balanceFormatted: tok?.balance || "0",
+            },
+            slippageBps
+          );
+
+          if (res.success) {
+            successCount++;
+            logActivity({
+              type: "trade",
+              title: `DEX Sold Tokens`,
+              desc: `Sold tokens from ${shortAddr(fromAddr)} via Jupiter`,
+              amount: res.amountSent,
+              amountColor: "var(--ok)",
+              status: "success",
+              chain: "sol",
+              txHash: res.txHash,
+              explorerUrl: res.explorerUrl,
+              sender: fromAddr,
+            });
+          } else {
+            failCount++;
+          }
+        }
+      } catch (err) {
+        failCount++;
+        console.error("DexBatchTrader trade error:", err);
+      }
+    }
+
+    setExecuting(false);
+    setProgressMsg(null);
+
+    if (successCount > 0) {
+      toast(`Successfully executed batch ${tradeAction} across ${successCount} wallets!`, "success");
+      setTimeout(() => scanAll(), 2500);
+    } else {
+      toast(`Batch ${tradeAction} encountered errors on ${failCount} wallets`, "error");
+    }
+  };
 
   return (
     <div className="dex-trader-panel">
@@ -21,10 +175,22 @@ export function DexBatchTrader({ wallet: _wallet }: { wallet?: WalletView }) {
         <div className="dex-title-box">
           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
             <span className="dex-badge">MULTI-WALLET SWAP ENGINE</span>
-            <span className="dex-badge-warning" style={{ background: "var(--surface-3)", color: "var(--text-dim)", border: "1px solid var(--border)" }}>COMING SOON</span>
+            {isSolana ? (
+              <span className="dex-badge" style={{ background: "rgba(34, 197, 94, 0.15)", color: "#4ade80", border: "1px solid rgba(34, 197, 94, 0.3)" }}>
+                JUPITER V6 AGGREGATOR LIVE ✓
+              </span>
+            ) : (
+              <span className="dex-badge-warning" style={{ background: "var(--surface-3)", color: "var(--text-dim)", border: "1px solid var(--border)" }}>
+                EVM COMING SOON
+              </span>
+            )}
           </div>
           <h3>DEX Batch Trader</h3>
-          <p>Multi-wallet parallel swap execution on Uniswap, PancakeSwap, and Raydium is currently in development.</p>
+          <p>
+            {isSolana
+              ? "Solana batch buying & selling is fully LIVE with Jupiter DEX aggregator and scoped hardware-grade signing."
+              : "Multi-wallet parallel swap execution on Uniswap and PancakeSwap is currently in development."}
+          </p>
         </div>
         <div className="dex-mode-pills">
           <button
@@ -51,12 +217,12 @@ export function DexBatchTrader({ wallet: _wallet }: { wallet?: WalletView }) {
           <label className="dex-label">1. Blockchain Network</label>
           <div className="dex-chain-tabs">
             {[
+              { key: "sol", name: "Solana", dex: "Jupiter Aggregator (Live ✓)" },
               { key: "eth", name: "Ethereum", dex: "Uniswap V3" },
               { key: "robinhood", name: "Robinhood", dex: "Robinhood Swap" },
               { key: "base", name: "Base", dex: "Aerodrome" },
               { key: "arb", name: "Arbitrum", dex: "Camelot" },
               { key: "bsc", name: "BNB Chain", dex: "PancakeSwap" },
-              { key: "sol", name: "Solana", dex: "Raydium" },
             ].map((c) => (
               <button
                 key={c.key}
@@ -113,7 +279,7 @@ export function DexBatchTrader({ wallet: _wallet }: { wallet?: WalletView }) {
             <input
               type="text"
               className="dex-input mono"
-              placeholder="Paste token address (e.g. 0x... or Solana Mint)"
+              placeholder={isSolana ? "Paste Solana SPL Token Mint (Base58)..." : "Paste token address (0x...)"}
               value={tokenAddress}
               onChange={(e) => setTokenAddress(e.target.value)}
             />
@@ -183,14 +349,37 @@ export function DexBatchTrader({ wallet: _wallet }: { wallet?: WalletView }) {
           </div>
         </div>
 
-        <button
-          type="button"
-          className="btn-execute-trade btn-disabled"
-          disabled={true}
-          style={{ opacity: 0.6, cursor: "not-allowed" }}
-        >
-          <IconZap size={13} /> On-Chain Router in Development
-        </button>
+        {isSolana ? (
+          <button
+            type="button"
+            className="btn-execute-trade"
+            onClick={handleExecute}
+            disabled={executing || activeWalletsCount === 0 || !tokenAddress.trim()}
+            style={{
+              background: tradeAction === "buy" ? "linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)" : "linear-gradient(135deg, #059669 0%, #10b981 100%)",
+              color: "#fff",
+              cursor: executing || activeWalletsCount === 0 || !tokenAddress.trim() ? "not-allowed" : "pointer",
+              opacity: executing || activeWalletsCount === 0 || !tokenAddress.trim() ? 0.6 : 1,
+            }}
+          >
+            {executing ? (
+              progressMsg || "Executing Swaps..."
+            ) : (
+              <>
+                <IconZap size={13} /> Execute Batch {tradeAction === "buy" ? "Buy" : "Sell"} ({activeWalletsCount} Wallets)
+              </>
+            )}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="btn-execute-trade btn-disabled"
+            disabled={true}
+            style={{ opacity: 0.6, cursor: "not-allowed" }}
+          >
+            <IconZap size={13} /> On-Chain Router in Development
+          </button>
+        )}
       </div>
     </div>
   );

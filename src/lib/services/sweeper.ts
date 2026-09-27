@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { formatEther, parseUnits, toBigInt } from "../utils/format";
 import { shortAddr } from "../wallets/wallet";
-import { SOL_MINT, fetchJupiterQuote, buildStealthDexSellMessage } from "../../services/jupiterSwapService";
+import { SOL_MINT, fetchJupiterQuote, buildStealthDexSellMessage, buildDexBuyMessage } from "../../services/jupiterSwapService";
 
 export interface SolanaAccountDetails {
   exists?: boolean;
@@ -819,3 +819,204 @@ export async function executeTokenDexSellSingle(
     };
   }
 }
+
+export interface DexBuyEstimate {
+  walletId: number;
+  address: string;
+  balanceWei: bigint;
+  balanceFormatted: string;
+  feeWei: bigint;
+  feeFormatted: string;
+  netWei: bigint;
+  netFormatted: string;
+  isSweepable: boolean;
+  statusText: string;
+  isSponsored?: boolean;
+  feePayerWalletId?: number;
+  tokenSymbol: string;
+  tokenMint: string;
+  tokenDecimals?: number;
+  estimatedTokensOut?: string;
+  priceImpactPct?: string;
+}
+
+export async function estimateTokenDexBuySweep(
+  walletId: number,
+  senderAddress: string,
+  token: { mint: string; symbol: string; decimals?: number },
+  buyAmountSol: number,
+  feePayerWalletId?: number,
+  slippageBps: number = 250,
+): Promise<DexBuyEstimate> {
+  const isSponsored = !!feePayerWalletId && feePayerWalletId !== walletId;
+  const decimals = token.decimals ?? 6;
+  const buyLamports = BigInt(Math.floor(buyAmountSol * 1e9));
+
+  try {
+    if (buyLamports <= 0n) {
+      return {
+        walletId,
+        address: senderAddress,
+        balanceWei: 0n,
+        balanceFormatted: "0 SOL",
+        feeWei: 0n,
+        feeFormatted: "0 SOL",
+        netWei: 0n,
+        netFormatted: "0",
+        isSweepable: false,
+        statusText: "Buy amount must be > 0 SOL",
+        isSponsored,
+        feePayerWalletId,
+        tokenSymbol: token.symbol,
+        tokenMint: token.mint,
+      };
+    }
+
+    // 1. Get wallet SOL balance
+    const acc = await invoke<AccountInfoRaw>("get_account_nonce_and_balance", {
+      chainKey: "sol",
+      address: senderAddress,
+    });
+    const walletLamports = BigInt(acc.balance_hex);
+    const feeLamports = isSponsored ? 0n : 5000n;
+    const requiredLamports = buyLamports + feeLamports;
+
+    // 2. Fetch live Jupiter quote (SOL -> Token)
+    const quote = await fetchJupiterQuote(SOL_MINT, token.mint, buyLamports.toString(), slippageBps);
+    const rawTokensOut = BigInt(quote.outAmount);
+    const estTokens = (Number(rawTokensOut) / (10 ** decimals)).toFixed(decimals > 6 ? 4 : 2);
+
+    if (walletLamports < requiredLamports) {
+      return {
+        walletId,
+        address: senderAddress,
+        balanceWei: walletLamports,
+        balanceFormatted: acc.balance_formatted,
+        feeWei: feeLamports,
+        feeFormatted: isSponsored ? "0 SOL (Gas Sponsored)" : "0.000005 SOL",
+        netWei: 0n,
+        netFormatted: `0 ${token.symbol}`,
+        isSweepable: false,
+        statusText: `Insufficient SOL (Needs ${buyAmountSol} SOL, has ${acc.balance_formatted})`,
+        isSponsored,
+        feePayerWalletId,
+        tokenSymbol: token.symbol,
+        tokenMint: token.mint,
+      };
+    }
+
+    return {
+      walletId,
+      address: senderAddress,
+      balanceWei: walletLamports,
+      balanceFormatted: acc.balance_formatted,
+      feeWei: feeLamports,
+      feeFormatted: isSponsored ? "0 SOL (Gas Sponsored)" : "0.000005 SOL",
+      netWei: rawTokensOut,
+      netFormatted: `~${estTokens} ${token.symbol}`,
+      isSweepable: true,
+      statusText: isSponsored ? "Ready to Buy (Sponsored) ✓" : "Ready to Buy ✓",
+      isSponsored,
+      feePayerWalletId,
+      tokenSymbol: token.symbol,
+      tokenMint: token.mint,
+      tokenDecimals: decimals,
+      estimatedTokensOut: estTokens,
+      priceImpactPct: quote.priceImpactPct,
+    };
+  } catch (err) {
+    return {
+      walletId,
+      address: senderAddress,
+      balanceWei: 0n,
+      balanceFormatted: "0 SOL",
+      feeWei: 0n,
+      feeFormatted: "—",
+      netWei: 0n,
+      netFormatted: `0 ${token.symbol}`,
+      isSweepable: false,
+      statusText: `Quote Error: ${String(err).slice(0, 45)}...`,
+      isSponsored,
+      feePayerWalletId,
+      tokenSymbol: token.symbol,
+      tokenMint: token.mint,
+    };
+  }
+}
+
+export async function executeTokenDexBuySingle(
+  walletId: number,
+  sessionToken: string,
+  feePayerWalletId: number | undefined,
+  feePayerAddress: string,
+  senderAddress: string,
+  token: { mint: string; symbol: string; decimals?: number },
+  buyAmountSol: number,
+  destinationAta?: string,
+  slippageBps: number = 250,
+): Promise<SweepTxResult> {
+  const cfg = SWEEP_CHAINS.sol;
+  const decimals = token.decimals ?? 6;
+  const buyLamports = BigInt(Math.floor(buyAmountSol * 1e9));
+
+  try {
+    if (buyLamports <= 0n) {
+      return {
+        walletId,
+        address: senderAddress,
+        success: false,
+        error: "Buy amount must be > 0 SOL",
+      };
+    }
+
+    // 1. Fetch live Jupiter quote (SOL -> Token)
+    const quote = await fetchJupiterQuote(SOL_MINT, token.mint, buyLamports.toString(), slippageBps);
+
+    // 2. Build DEX Buy Versioned Message
+    const { messageBase64 } = await buildDexBuyMessage(
+      quote,
+      senderAddress,
+      feePayerAddress,
+      destinationAta,
+    );
+
+    interface SolanaSignResult {
+      rawTxBase64: string;
+      fromAddress: string;
+    }
+
+    // 3. Dual-sign natively in Rust (Zero private key exposure to webview)
+    const signResult = await invoke<SolanaSignResult>("sign_solana_versioned_tx_scoped", {
+      walletId,
+      sessionToken,
+      tx: {
+        messageBase64,
+        feePayerWalletId: feePayerWalletId ?? null,
+      },
+    });
+
+    // 4. Broadcast to Solana mainnet RPC
+    const txHash = await invoke<string>("broadcast_solana_tx", {
+      rawTxBase64: signResult.rawTxBase64,
+    });
+
+    const estTokens = (Number(quote.outAmount) / (10 ** decimals)).toFixed(decimals > 6 ? 4 : 2);
+
+    return {
+      walletId,
+      address: senderAddress,
+      success: true,
+      txHash,
+      explorerUrl: `${cfg.explorerUrl}${txHash}`,
+      amountSent: `${buyAmountSol} SOL → +${estTokens} ${token.symbol}`,
+    };
+  } catch (err) {
+    return {
+      walletId,
+      address: senderAddress,
+      success: false,
+      error: String(err),
+    };
+  }
+}
+
