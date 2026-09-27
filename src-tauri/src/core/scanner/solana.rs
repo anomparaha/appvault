@@ -279,6 +279,12 @@ fn merge_solana_metadata(target: &mut SolanaTokenMetadata, source: SolanaTokenMe
     }
     if target.logo_url.is_none() {
         target.logo_url = source.logo_url;
+    } else if let Some(ref source_logo) = source.logo_url {
+        if let Some(ref target_logo) = target.logo_url {
+            if target_logo.contains("ipfs.io/") || target_logo.contains("dweb.link/") {
+                target.logo_url = Some(source_logo.clone());
+            }
+        }
     }
 }
 
@@ -326,9 +332,13 @@ fn is_local_or_private_logo_host(host: &str) -> bool {
 }
 
 fn normalize_token_logo_url(value: &str) -> Option<String> {
-    let value = value.trim();
+    let mut value = value.trim();
     if value.is_empty() || value.len() > 2048 {
         return None;
+    }
+
+    if let Some(rest) = value.strip_prefix("https://cdn.helius-rpc.com/cdn-cgi/image//") {
+        value = rest.trim();
     }
 
     let candidate = if let Some(path) = value.strip_prefix("ipfs://") {
@@ -337,13 +347,20 @@ fn normalize_token_logo_url(value: &str) -> Option<String> {
         if path.is_empty() {
             return None;
         }
-        format!("https://ipfs.io/ipfs/{path}")
+        format!("https://pump.mypinata.cloud/ipfs/{path}")
     } else if let Some(path) = value.strip_prefix("ar://") {
         let path = path.trim_start_matches('/');
         if path.is_empty() {
             return None;
         }
         format!("https://arweave.net/{path}")
+    } else if let Some(idx) = value.find("/ipfs/") {
+        let path = &value[idx + 6..];
+        let path = path.trim_start_matches('/');
+        if path.is_empty() {
+            return None;
+        }
+        format!("https://pump.mypinata.cloud/ipfs/{path}")
     } else {
         value.to_string()
     };
@@ -716,7 +733,7 @@ mod tests {
     fn normalizes_ipfs_and_arweave_logo_uris() {
         assert_eq!(
             normalize_token_logo_url("ipfs://ipfs/bafybeigdyrzt"),
-            Some("https://ipfs.io/ipfs/bafybeigdyrzt".to_string())
+            Some("https://pump.mypinata.cloud/ipfs/bafybeigdyrzt".to_string())
         );
         assert_eq!(
             normalize_token_logo_url("ar://metadata-hash/logo.png"),
@@ -745,7 +762,7 @@ mod tests {
         assert_eq!(metadata.name, "Stonk Token");
         assert_eq!(
             metadata.logo_url.as_deref(),
-            Some("https://ipfs.io/ipfs/bafybeigdyrzt/logo")
+            Some("https://pump.mypinata.cloud/ipfs/bafybeigdyrzt/logo")
         );
     }
 

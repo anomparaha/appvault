@@ -40,7 +40,27 @@ function isLocalOrPrivateHost(hostname: string): boolean {
 function safeRemoteLogoUrl(value: string | null | undefined): string | null {
   if (!value || value.length > 2048) return null;
   try {
-    const url = new URL(value);
+    let clean = value.trim();
+
+    // Strip Helius image proxy prefix if present
+    if (clean.startsWith("https://cdn.helius-rpc.com/cdn-cgi/image//")) {
+      clean = clean.replace("https://cdn.helius-rpc.com/cdn-cgi/image//", "");
+    }
+
+    // Rewrite sunsetted IPFS gateways (ipfs.io, dweb.link, cf-ipfs) to dedicated pump/pinata gateway
+    if (clean.startsWith("ipfs://")) {
+      const path = clean.replace(/^ipfs:\/\/(?:ipfs\/)?/, "");
+      clean = `https://pump.mypinata.cloud/ipfs/${path}`;
+    } else if (clean.includes("/ipfs/")) {
+      const idx = clean.indexOf("/ipfs/");
+      const path = clean.slice(idx + 6).replace(/^\/+/, "");
+      clean = `https://pump.mypinata.cloud/ipfs/${path}`;
+    } else if (clean.startsWith("ar://")) {
+      const path = clean.replace(/^ar:\/\//, "");
+      clean = `https://arweave.net/${path}`;
+    }
+
+    const url = new URL(clean);
     return url.protocol === "https:" && url.hostname && !url.username && !url.password &&
       !isLocalOrPrivateHost(url.hostname)
       ? url.toString()
@@ -67,8 +87,23 @@ export function TokenIcon({
   className,
 }: TokenIconProps) {
   const { sessionToken, isAirGapped } = useApp();
-  const [remoteLogoFailed, setRemoteLogoFailed] = useState(false);
-  useEffect(() => setRemoteLogoFailed(false), [logoUrl]);
+  const [imgSrc, setImgSrc] = useState<string | null>(null);
+  const [retryGateway, setRetryGateway] = useState(0);
+
+  useEffect(() => {
+    const initial = sessionToken && !isAirGapped ? safeRemoteLogoUrl(logoUrl) : null;
+    setImgSrc(initial);
+    setRetryGateway(0);
+  }, [logoUrl, sessionToken, isAirGapped]);
+
+  const handleImgError = () => {
+    if (imgSrc && imgSrc.includes("pump.mypinata.cloud/ipfs/") && retryGateway === 0) {
+      setRetryGateway(1);
+      setImgSrc(imgSrc.replace("pump.mypinata.cloud", "gateway.pinata.cloud"));
+    } else {
+      setImgSrc(null);
+    }
+  };
 
   const normSym = (symbol || "").trim().toLowerCase();
   const normChain = (chain || "").trim().toLowerCase();
@@ -182,17 +217,14 @@ export function TokenIcon({
 
   // Remote token artwork is an optional network resource: it is fetched only after the vault
   // session is unlocked and Safe Mode is explicitly off. If it fails, fall back to the chain icon.
-  const remoteLogo = sessionToken && !isAirGapped && !remoteLogoFailed
-    ? safeRemoteLogoUrl(logoUrl)
-    : null;
-  if (remoteLogo) {
+  if (imgSrc) {
     return (
       <img
-        src={remoteLogo}
+        src={imgSrc}
         alt={`${name || symbol || "Token"} logo`}
         loading="lazy"
         referrerPolicy="no-referrer"
-        onError={() => setRemoteLogoFailed(true)}
+        onError={handleImgError}
         style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }}
         className={className}
       />

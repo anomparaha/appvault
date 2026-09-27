@@ -141,6 +141,27 @@ pub fn ensure_schema(conn: &rusqlite::Connection) -> Result<(), String> {
         [],
     );
 
+    let _ = conn.execute(
+        "UPDATE token_balances 
+         SET logo_url = REPLACE(logo_url, 'https://ipfs.io/ipfs/', 'https://pump.mypinata.cloud/ipfs/') 
+         WHERE logo_url LIKE '%ipfs.io/ipfs/%'",
+        [],
+    );
+
+    let _ = conn.execute(
+        "UPDATE token_balances 
+         SET logo_url = REPLACE(logo_url, 'https://dweb.link/ipfs/', 'https://pump.mypinata.cloud/ipfs/') 
+         WHERE logo_url LIKE '%dweb.link/ipfs/%'",
+        [],
+    );
+
+    let _ = conn.execute(
+        "UPDATE token_balances 
+         SET logo_url = REPLACE(logo_url, 'https://cf-ipfs.com/ipfs/', 'https://pump.mypinata.cloud/ipfs/') 
+         WHERE logo_url LIKE '%cf-ipfs.com/ipfs/%'",
+        [],
+    );
+
     Ok(())
 }
 
