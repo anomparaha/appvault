@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::cmp::Reverse;
 
 const TRANSFER_EVENT_TOPIC: &str = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-const TOKEN_LOOKBACK_WINDOWS: [u64; 4] = [100_000, 10_000, 2_000, 250];
+const TOKEN_LOOKBACK_WINDOWS: [u64; 4] = [8_000, 2_000, 500, 100];
 const MAX_DISCOVERED_CONTRACTS: usize = 100;
 const MAX_TOKEN_DECIMALS: u8 = 36;
 
@@ -148,16 +148,33 @@ fn parse_batch_results(
 ) -> Option<HashMap<u64, String>> {
     let mut results_by_id = HashMap::<u64, String>::new();
     for item in items {
+        let Some(id) = item.get("id").and_then(|id| id.as_u64()) else {
+            return None;
+        };
         if item.get("error").is_some() {
-            return None;
+            if id == 0 {
+                return None;
+            }
+            results_by_id.insert(id, "0x0".to_string());
+            continue;
         }
-        let id = item.get("id")?.as_u64()?;
-        let result = item.get("result")?.as_str()?;
+        let Some(result) = item.get("result").and_then(|r| r.as_str()) else {
+            if id == 0 {
+                return None;
+            }
+            results_by_id.insert(id, "0x0".to_string());
+            continue;
+        };
         let clean = result.strip_prefix("0x").unwrap_or(result);
-        if clean.is_empty() || !clean.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        if !clean.chars().all(|ch| ch.is_ascii_hexdigit()) {
             return None;
         }
-        results_by_id.insert(id, result.to_string());
+        let normalized = if clean.is_empty() {
+            "0x0".to_string()
+        } else {
+            result.to_string()
+        };
+        results_by_id.insert(id, normalized);
     }
 
     if results_by_id.len() != expected_ids.len()
@@ -486,21 +503,20 @@ pub async fn scan_evm_for_wallet(
         let (native_amount, native_balance) = format_balance_display(native_result, symbol);
         let mut has_funds = native_amount > 0.0;
         let mut tokens = Vec::new();
-        let mut token_results_valid = true;
 
         for (index, token) in token_list.iter().enumerate() {
             let Some(result_id) = u64::try_from(index + 1).ok() else {
-                token_results_valid = false;
-                break;
+                continue;
             };
             let Some(result) = results_by_id.get(&result_id) else {
-                token_results_valid = false;
-                break;
+                continue;
             };
             let clean = result.strip_prefix("0x").unwrap_or(result);
+            if clean.is_empty() || clean.chars().all(|c| c == '0') {
+                continue;
+            }
             if u128::from_str_radix(clean, 16).is_err() {
-                token_results_valid = false;
-                break;
+                continue;
             }
             if let Some((amount, formatted)) = format_token_amount(result, token.decimals, &token.symbol) {
                 if amount > 0.0 {
@@ -518,9 +534,6 @@ pub async fn scan_evm_for_wallet(
                     });
                 }
             }
-        }
-        if !token_results_valid {
-            continue;
         }
 
         return Ok(WalletChainResult {
@@ -577,4 +590,99 @@ mod tests {
         assert!(topic.ends_with("00000000000000000000000000000000000000ab"));
         assert!(address_topic("0xnot-an-address").is_none());
     }
+
+    #[test]
+    fn parses_batch_results_handles_empty_hex_and_token_errors() {
+        let items = vec![
+            serde_json::json!({"id": 0, "result": "0xb87e6daa7e0"}),
+            serde_json::json!({"id": 1, "result": "0x0"}),
+            serde_json::json!({"id": 2, "result": "0x"}), // uninitialized contract
+            serde_json::json!({"id": 3, "error": {"code": -32000, "message": "revert"}}),
+        ];
+        let expected = vec![0, 1, 2, 3];
+        let res = parse_batch_results(items, &expected).expect("Batch should succeed");
+        assert_eq!(res.get(&0).unwrap(), "0xb87e6daa7e0");
+        assert_eq!(res.get(&1).unwrap(), "0x0");
+        assert_eq!(res.get(&2).unwrap(), "0x0");
+        assert_eq!(res.get(&3).unwrap(), "0x0");
+    }
+
+    #[test]
+    fn parses_batch_results_fails_when_native_balance_errors() {
+        let items = vec![
+            serde_json::json!({"id": 0, "error": {"code": -32000, "message": "rpc error"}}),
+            serde_json::json!({"id": 1, "result": "0x0"}),
+        ];
+        let expected = vec![0, 1];
+        assert!(parse_batch_results(items, &expected).is_none());
+    }
+
+    #[tokio::test]
+    async fn test_live_robinhood_scanner() {
+        let client = shared_client();
+        let rpcs = &[
+            "https://api.zan.top/node/v1/robinhood/mainnet/9f2590af4fda43418ca4f0e8ded27af5",
+            "https://rpc.mainnet.chain.robinhood.com",
+        ];
+        let res = scan_evm_for_wallet(
+            &client,
+            "0x97BA80e5a1b2c03d9FBcc5d3d897f28A7a240c8E",
+            "robinhood",
+            "ETH",
+            rpcs,
+            ROBINHOOD_TOKENS,
+            vec![],
+            3,
+        ).await;
+        let val = res.expect("Robinhood scan should succeed");
+        assert_eq!(val.chain_key, "robinhood");
+        assert!(val.has_funds);
+        assert!(val.tokens.is_empty(), "Tokens must be empty since JEV is 0");
+        assert!(val.native_balance.contains("0.000013 ETH") || val.native_balance.contains("0.000012"));
+    }
+
+    #[tokio::test]
+    async fn test_live_base_scanner() {
+        let client = shared_client();
+        let rpcs = &[
+            "https://mainnet.base.org",
+            "https://base.publicnode.com",
+        ];
+        let res = scan_evm_for_wallet(
+            &client,
+            "0x97BA80e5a1b2c03d9FBcc5d3d897f28A7a240c8E",
+            "base",
+            "ETH",
+            rpcs,
+            crate::adapters::evm::tokens::BASE_TOKENS,
+            vec![],
+            3,
+        ).await;
+        let val = res.expect("Base scan should succeed");
+        assert_eq!(val.chain_key, "base");
+    }
+
+    #[tokio::test]
+    async fn test_live_arb_scanner() {
+        let client = shared_client();
+        let rpcs = &[
+            "https://arb1.arbitrum.io/rpc",
+            "https://arbitrum.publicnode.com",
+        ];
+        let res = scan_evm_for_wallet(
+            &client,
+            "0x97BA80e5a1b2c03d9FBcc5d3d897f28A7a240c8E",
+            "arb",
+            "ETH",
+            rpcs,
+            crate::adapters::evm::tokens::ARB_TOKENS,
+            vec![],
+            3,
+        ).await;
+        let val = res.expect("Arbitrum scan should succeed");
+        assert_eq!(val.chain_key, "arb");
+    }
 }
+
+
+

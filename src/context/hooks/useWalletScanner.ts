@@ -36,7 +36,8 @@ export function useWalletScanner({
   const [scanning, setScanning] = useState(false);
   const [scanProgress, setScanProgress] = useState<ScanProgress | null>(null);
   const scanCancelledRef = useRef(false);
-  const scanInProgressRef = useRef(false);
+  const manualScanInProgressRef = useRef(false);
+  const bgSyncInProgressRef = useRef(false);
 
   const [isAirGapped, setIsAirGapped] = useState<boolean>(() => {
     const saved = localStorage.getItem('plurivex_air_gapped');
@@ -84,6 +85,7 @@ export function useWalletScanner({
 
   const stopScan = useCallback(() => {
     scanCancelledRef.current = true;
+    manualScanInProgressRef.current = false;
     setScanning(false);
     setScanProgress(null);
     toast('Balance scan stopped', 'info');
@@ -96,21 +98,12 @@ export function useWalletScanner({
         toast("Authentication required: Vault session is locked.", "error");
         return { funded: 0, errors: 1 };
       }
-      if (scanInProgressRef.current) {
-        // Wait a short moment if a quick background sync is currently concluding
-        let waitAttempts = 0;
-        while (scanInProgressRef.current && waitAttempts < 8) {
-          await new Promise((resolve) => setTimeout(resolve, 350));
-          waitAttempts++;
-        }
-
-        if (scanInProgressRef.current) {
-          toast('A balance sync is already running. Please try again shortly.', 'info');
-          return { funded: 0, errors: 0 };
-        }
+      if (manualScanInProgressRef.current) {
+        toast('A manual balance scan is already in progress.', 'info');
+        return { funded: 0, errors: 0 };
       }
 
-      scanInProgressRef.current = true;
+      manualScanInProgressRef.current = true;
       scanCancelledRef.current = false;
       setScanning(true);
 
@@ -161,7 +154,7 @@ export function useWalletScanner({
           });
         }
       } finally {
-        scanInProgressRef.current = false;
+        manualScanInProgressRef.current = false;
         setScanning(false);
         setScanProgress(null);
       }
@@ -178,12 +171,13 @@ export function useWalletScanner({
    */
   const refreshWallets = useCallback(
     async (targets: WalletView[], chainKey?: string): Promise<void> => {
-      if (!targets.length || isAirGapped || !sessionToken || scanInProgressRef.current) return;
-      scanInProgressRef.current = true;
+      if (!targets.length || isAirGapped || !sessionToken || manualScanInProgressRef.current || bgSyncInProgressRef.current) return;
+      bgSyncInProgressRef.current = true;
       let shouldReload = false;
 
       try {
         for (const chunk of chunksOf(targets, SCAN_CHUNK_SIZE)) {
+          if (manualScanInProgressRef.current) break;
           const ids = chunk.map((wallet) => wallet.id);
           try {
             const summary = chunk.length === 1
@@ -200,7 +194,7 @@ export function useWalletScanner({
 
         if (shouldReload) await loadWallets();
       } finally {
-        scanInProgressRef.current = false;
+        bgSyncInProgressRef.current = false;
       }
     },
     [isAirGapped, sessionToken, loadWallets]
