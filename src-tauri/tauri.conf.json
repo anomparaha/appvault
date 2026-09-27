@@ -40,7 +40,7 @@
   },
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": false,
     "targets": "all",
     "copyright": "Copyright © 2026 Plurivex Labs. All rights reserved.",
     "category": "Finance",
