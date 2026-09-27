@@ -418,35 +418,38 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
           </div>
         </div>
 
-        {/* Single Wallet Selection Dropdown (When in Single Wallet scope) */}
+        {/* Single Wallet Selection Card (When in Single Wallet scope) */}
         {scopeMode === "single" && !isLockedToPropWallet && isSolana && (
-          <div className="dex-field" style={{ gridColumn: "1 / -1", padding: "10px 14px", background: "rgba(59,130,246,0.06)", borderRadius: "6px", border: "1px solid rgba(59,130,246,0.25)" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-              <label style={{ fontSize: "11px", fontWeight: 700, color: "#60a5fa", textTransform: "uppercase" }}>
-                Pilih Dompet yang Bertransaksi:
-              </label>
+          <div className="dex-wallet-selector-card">
+            <div className="dex-wallet-selector-left">
+              <div className="dex-wallet-selector-badge">
+                <IconTarget size={12} /> Trading Wallet
+              </div>
               <select
-                className="dex-input mono"
-                style={{
-                  padding: "5px 10px",
-                  fontSize: "12px",
-                  width: 360,
-                  cursor: "pointer",
-                }}
+                className="dex-wallet-select mono"
                 value={selectedSingleWallet?.id}
                 onChange={(e) => setSingleWalletId(parseInt(e.target.value, 10))}
               >
                 {solWallets.map((w, i) => {
-                  const bal = w.balances?.sol || "0";
+                  const bal = (w.balances?.sol || "0").replace(/\s*SOL\s*$/i, "");
                   return (
                     <option key={w.id} value={w.id}>
-                      Wallet #{i + 1} ({shortAddr(w.solAddress!)}) — {bal.includes("SOL") ? bal : `${bal} SOL`} {w.label ? `[${w.label}]` : ""}
+                      {w.label ? `${w.label} · ` : `Wallet #${i + 1} · `}{shortAddr(w.solAddress!)} ({bal} SOL)
                     </option>
                   );
                 })}
               </select>
-              <span style={{ fontSize: "11px", color: "var(--text-dim)" }}>
-                ✓ Transaksi dilakukan mandiri oleh dompet ini. Token hasil pembelian 100% disimpan di dompet ini.
+            </div>
+
+            <div className="dex-wallet-selector-right">
+              <div className="dex-wallet-balance-tag">
+                <span className="dex-balance-label">Saldo</span>
+                <span className="dex-balance-val mono">
+                  {(selectedSingleWallet?.balances?.sol || "0").replace(/\s*SOL\s*$/i, "")} SOL
+                </span>
+              </div>
+              <span className="dex-wallet-guarantee">
+                ✓ 100% token disimpan di dompet ini
               </span>
             </div>
           </div>
@@ -454,44 +457,53 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
 
         {/* Target Token Input */}
         <div className="dex-field">
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px", flexWrap: "wrap", gap: "6px" }}>
-            <label className="dex-label" style={{ margin: 0 }}>2. Target Token Contract / Mint Address</label>
-            <button
-              type="button"
-              onClick={() => {
-                setTokenAddress(OFFICIAL_TOKEN_SPEC.contractAddress);
-                setSelectedChain("robinhood");
-              }}
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "5px",
-                fontSize: "10px",
-                fontWeight: "700",
-                background: "rgba(204, 255, 0, 0.12)",
-                color: "#ccff00",
-                border: "1px solid rgba(204, 255, 0, 0.35)",
-                borderRadius: "5px",
-                padding: "2px 8px",
-                cursor: "pointer",
-              }}
-            >
-              <img
-                src={OFFICIAL_TOKEN_SPEC.logoUrl}
-                alt={OFFICIAL_TOKEN_SPEC.name}
-                style={{ width: "13px", height: "13px", borderRadius: "3px", objectFit: "cover" }}
-              />
-              <span>{OFFICIAL_TOKEN_SPEC.name} ({OFFICIAL_TOKEN_SPEC.symbol})</span>
-              <span style={{ fontSize: "8.5px", background: "rgba(34, 197, 94, 0.2)", color: "#4ade80", padding: "1px 4px", borderRadius: "3px" }}>
-                VERIFIED ✓
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "4px", flexWrap: "wrap", gap: "6px" }}>
+            <label className="dex-label" style={{ margin: 0 }}>
+              {isSolana ? "2. Target Solana SPL Token (Mint Address)" : "2. Target Token Contract / Mint Address"}
+            </label>
+            {isSolana && tokenAddress.trim().toLowerCase().endsWith("pump") && (
+              <span style={{ fontSize: "10px", fontWeight: "700", background: "rgba(34, 197, 94, 0.15)", color: "#4ade80", border: "1px solid rgba(34, 197, 94, 0.3)", borderRadius: "4px", padding: "2px 8px" }}>
+                💊 Pump.fun Token
               </span>
-            </button>
+            )}
+            {!isSolana && (
+              <button
+                type="button"
+                onClick={() => {
+                  setTokenAddress(OFFICIAL_TOKEN_SPEC.contractAddress);
+                  setSelectedChain("robinhood");
+                }}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "5px",
+                  fontSize: "10px",
+                  fontWeight: "700",
+                  background: "rgba(204, 255, 0, 0.12)",
+                  color: "#ccff00",
+                  border: "1px solid rgba(204, 255, 0, 0.35)",
+                  borderRadius: "5px",
+                  padding: "2px 8px",
+                  cursor: "pointer",
+                }}
+              >
+                <img
+                  src={OFFICIAL_TOKEN_SPEC.logoUrl}
+                  alt={OFFICIAL_TOKEN_SPEC.name}
+                  style={{ width: "13px", height: "13px", borderRadius: "3px", objectFit: "cover" }}
+                />
+                <span>{OFFICIAL_TOKEN_SPEC.name} ({OFFICIAL_TOKEN_SPEC.symbol})</span>
+                <span style={{ fontSize: "8.5px", background: "rgba(34, 197, 94, 0.2)", color: "#4ade80", padding: "1px 4px", borderRadius: "3px" }}>
+                  VERIFIED ✓
+                </span>
+              </button>
+            )}
           </div>
           <div className="token-input-box">
             <input
               type="text"
               className="dex-input mono"
-              placeholder={isSolana ? "Paste Solana SPL Token Mint (Base58)..." : "Paste token address (0x...)"}
+              placeholder={isSolana ? "Paste Solana SPL Token Mint (misal: ...pump)" : "Paste token address (0x...)"}
               value={tokenAddress}
               onChange={(e) => setTokenAddress(e.target.value)}
             />
@@ -573,9 +585,17 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
         {/* Trade Configuration */}
         <div className="dex-config-row">
           <div className="dex-field flex-1">
-            <label className="dex-label">
-              {scopeMode === "single" ? "3. Buy Amount (SOL)" : "3. Amount per Wallet"}
-            </label>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "2px" }}>
+              <label className="dex-label" style={{ margin: 0 }}>
+                {scopeMode === "single" ? "3. Buy Amount (SOL)" : "3. Amount per Wallet"}
+              </label>
+              {scopeMode === "single" && selectedSingleWallet && (
+                <span style={{ fontSize: "10px", color: "var(--text-dim)" }}>
+                  Saldo: <b style={{ color: "var(--text-main)" }}>{(selectedSingleWallet.balances?.sol || "0").replace(/\s*SOL\s*$/i, "")} SOL</b>
+                </span>
+              )}
+            </div>
+
             <div className="amount-input-wrap">
               <input
                 type="text"
@@ -585,42 +605,92 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
               />
               <span className="amount-unit">{selectedChain === "bsc" ? "BNB" : selectedChain === "sol" ? "SOL" : "ETH"}</span>
             </div>
-            {scopeMode === "single" && selectedSingleWallet && (
-              <span style={{ fontSize: "10px", color: "var(--text-dim)", marginTop: "4px", display: "block" }}>
-                Saldo Tersedia: <b>{selectedSingleWallet.balances?.sol || "0"} SOL</b>
-              </span>
+
+            {/* Quick Amount Presets for Single Wallet Mode */}
+            {scopeMode === "single" && isSolana && selectedSingleWallet && (
+              <div className="dex-quick-presets">
+                {["0.01", "0.05", "0.1", "0.25"].map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    className={`dex-preset-btn ${amountPerWallet === preset ? "active" : ""}`}
+                    onClick={() => setAmountPerWallet(preset)}
+                  >
+                    {preset} SOL
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="dex-preset-btn"
+                  onClick={() => {
+                    const raw = parseFloat((selectedSingleWallet.balances?.sol || "0").replace(/\s*SOL\s*$/i, "")) || 0;
+                    const half = Math.max(0, (raw * 0.5) - 0.002).toFixed(4);
+                    setAmountPerWallet(half);
+                  }}
+                >
+                  50%
+                </button>
+                <button
+                  type="button"
+                  className="dex-preset-btn"
+                  onClick={() => {
+                    const raw = parseFloat((selectedSingleWallet.balances?.sol || "0").replace(/\s*SOL\s*$/i, "")) || 0;
+                    const max = Math.max(0, raw - 0.005).toFixed(4);
+                    setAmountPerWallet(max);
+                  }}
+                >
+                  MAX
+                </button>
+              </div>
             )}
           </div>
 
           <div className="dex-field w-32">
-            <label className="dex-label">Slippage (%)</label>
+            <label className="dex-label" style={{ marginBottom: "2px" }}>Slippage (%)</label>
             <input
               type="text"
               className="dex-input mono"
               value={slippage}
               onChange={(e) => setSlippage(e.target.value)}
             />
+            {scopeMode === "single" && (
+              <div className="dex-quick-presets">
+                {["1.0", "2.5", "5.0"].map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    className={`dex-preset-btn ${slippage === s ? "active" : ""}`}
+                    onClick={() => setSlippage(s)}
+                  >
+                    {s}%
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
-          <div className="dex-field flex-1">
-            <label className="dex-label">Execution Strategy</label>
-            <div className="strategy-pills">
-              <button
-                type="button"
-                className={`strat-btn ${traderMode === "distributed" ? "active" : ""}`}
-                onClick={() => setTraderMode("distributed")}
-              >
-                <IconTarget size={12} /> {scopeMode === "single" ? "Direct Swap" : "Distributed Sniper"}
-              </button>
-              <button
-                type="button"
-                className={`strat-btn ${traderMode === "sweep" ? "active" : ""}`}
-                onClick={() => setTraderMode("sweep")}
-              >
-                <IconZap size={12} /> Auto-Consolidate
-              </button>
+          {/* Strategy Pills only shown in Batch mode */}
+          {scopeMode === "batch" && (
+            <div className="dex-field flex-1">
+              <label className="dex-label" style={{ marginBottom: "2px" }}>Execution Strategy</label>
+              <div className="strategy-pills">
+                <button
+                  type="button"
+                  className={`strat-btn ${traderMode === "distributed" ? "active" : ""}`}
+                  onClick={() => setTraderMode("distributed")}
+                >
+                  <IconTarget size={12} /> Distributed Sniper
+                </button>
+                <button
+                  type="button"
+                  className={`strat-btn ${traderMode === "sweep" ? "active" : ""}`}
+                  onClick={() => setTraderMode("sweep")}
+                >
+                  <IconZap size={12} /> Auto-Consolidate
+                </button>
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
 
@@ -630,10 +700,11 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
           {scopeMode === "single" ? (
             <div>
               <div className="summary-wallets">
-                Trading on: <strong className="mono text-emerald">{selectedSingleWallet ? shortAddr(selectedSingleWallet.solAddress || "") : "No wallet selected"}</strong>
+                Trading di: <strong className="mono text-emerald">{selectedSingleWallet ? shortAddr(selectedSingleWallet.solAddress || "") : "Pilih Dompet"}</strong>
               </div>
               <div className="summary-est" style={{ fontSize: "11px", color: "var(--text-dim)" }}>
-                Spend: <strong className="mono">{amountPerWallet} SOL</strong> · 100% token masuk ke akun dompet ini
+                Total Belanja: <strong className="mono" style={{ color: "#4ade80" }}>{amountPerWallet} SOL</strong>
+                <span style={{ marginLeft: 8 }}>· 100% token masuk ke akun dompet ini</span>
               </div>
             </div>
           ) : (
@@ -653,26 +724,25 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
             type="button"
             className="btn-execute-trade"
             onClick={handleExecute}
-            disabled={executing || activeWalletsCount === 0 || !tokenAddress.trim()}
+            disabled={executing || activeWalletsCount === 0 || !tokenAddress.trim() || !amountPerWallet || parseFloat(amountPerWallet) <= 0}
             style={{
               background: tradeAction === "buy"
-                ? scopeMode === "single"
-                  ? "linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)"
-                  : fundingMode === "master"
-                  ? "linear-gradient(135deg, #d97706 0%, #f59e0b 100%)"
-                  : "linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)"
+                ? "linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)"
                 : "linear-gradient(135deg, #059669 0%, #10b981 100%)",
               color: "#fff",
-              cursor: executing || activeWalletsCount === 0 || !tokenAddress.trim() ? "not-allowed" : "pointer",
-              opacity: executing || activeWalletsCount === 0 || !tokenAddress.trim() ? 0.6 : 1,
+              cursor: executing || activeWalletsCount === 0 || !tokenAddress.trim() || !amountPerWallet || parseFloat(amountPerWallet) <= 0 ? "not-allowed" : "pointer",
+              opacity: executing || activeWalletsCount === 0 || !tokenAddress.trim() || !amountPerWallet || parseFloat(amountPerWallet) <= 0 ? 0.6 : 1,
+              padding: "0 22px",
+              height: "36px",
+              fontSize: "12px",
             }}
           >
             {executing ? (
               progressMsg || "Executing Swaps..."
             ) : (
               <>
-                <IconZap size={13} /> {scopeMode === "single"
-                  ? `Execute Swap on ${shortAddr(selectedSingleWallet?.solAddress || "")}`
+                <IconZap size={14} /> {scopeMode === "single"
+                  ? `Swap Sekarang (${amountPerWallet} SOL)`
                   : `Execute ${fundingMode === "master" && tradeAction === "buy" ? "Master-Funded" : "Batch"} ${tradeAction === "buy" ? "Buy" : "Sell"} (${activeWalletsCount} Wallets)`}
               </>
             )}
