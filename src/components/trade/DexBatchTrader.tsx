@@ -12,6 +12,18 @@ import { logActivity } from "../../lib/services/activity";
 import { shortAddr } from "../../lib/wallets/wallet";
 import { isValidSolAddress } from "../../lib/utils/format";
 
+interface TradeReceipt {
+  success: boolean;
+  action: "buy" | "sell";
+  scope: "single" | "batch";
+  walletAddress?: string | null;
+  txHash?: string;
+  explorerUrl?: string;
+  amountSent?: string;
+  timestamp: number;
+  error?: string;
+}
+
 export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
   const { wallets, selectedSweepIds, sessionToken, scanAll, toast } = useApp();
   const [selectedChain, setSelectedChain] = useState<"eth" | "robinhood" | "base" | "arb" | "bsc" | "sol">("sol");
@@ -26,6 +38,7 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
   const [traderMode, setTraderMode] = useState<"distributed" | "sweep">("distributed");
   const [executing, setExecuting] = useState(false);
   const [progressMsg, setProgressMsg] = useState<string | null>(null);
+  const [lastTradeReceipt, setLastTradeReceipt] = useState<TradeReceipt | null>(null);
 
   const isLockedToPropWallet = !!wallet;
 
@@ -137,8 +150,13 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
     if (!confirmed) return;
 
     setExecuting(true);
+    setLastTradeReceipt(null);
     let successCount = 0;
     let failCount = 0;
+    let latestTxHash: string | undefined;
+    let latestExplorerUrl: string | undefined;
+    let latestAmountSent: string | undefined;
+    let latestError: string | undefined;
 
     for (let i = 0; i < targetWallets.length; i++) {
       const w = targetWallets[i];
@@ -178,6 +196,9 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
 
           if (res.success) {
             successCount++;
+            latestTxHash = res.txHash;
+            latestExplorerUrl = res.explorerUrl;
+            latestAmountSent = res.amountSent;
             logActivity({
               type: "trade",
               title: scopeMode === "single" ? `DEX Swap Bought Tokens` : `DEX Bought Tokens`,
@@ -196,6 +217,7 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
             });
           } else {
             failCount++;
+            latestError = res.error;
             logActivity({
               type: "trade",
               title: `DEX Buy Failed`,
@@ -230,6 +252,9 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
 
           if (res.success) {
             successCount++;
+            latestTxHash = res.txHash;
+            latestExplorerUrl = res.explorerUrl;
+            latestAmountSent = res.amountSent;
             logActivity({
               type: "trade",
               title: scopeMode === "single" ? `DEX Sold Tokens` : `DEX Sold Tokens`,
@@ -244,10 +269,12 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
             });
           } else {
             failCount++;
+            latestError = res.error;
           }
         }
       } catch (err) {
         failCount++;
+        latestError = String(err);
         console.error("DexBatchTrader trade error:", err);
       }
     }
@@ -256,6 +283,16 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
     setProgressMsg(null);
 
     if (successCount > 0) {
+      setLastTradeReceipt({
+        success: true,
+        action: tradeAction,
+        scope: scopeMode,
+        walletAddress: targetWallets[0]?.solAddress,
+        txHash: latestTxHash,
+        explorerUrl: latestExplorerUrl,
+        amountSent: scopeMode === "single" ? latestAmountSent : `${successCount} wallets swapped successfully`,
+        timestamp: Date.now(),
+      });
       toast(
         scopeMode === "single"
           ? `Successfully swapped tokens in wallet ${shortAddr(targetWallets[0].solAddress!)}!`
@@ -264,6 +301,14 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
       );
       setTimeout(() => scanAll(), 2500);
     } else {
+      setLastTradeReceipt({
+        success: false,
+        action: tradeAction,
+        scope: scopeMode,
+        walletAddress: targetWallets[0]?.solAddress,
+        error: latestError || `Trade execution failed on ${failCount} wallets`,
+        timestamp: Date.now(),
+      });
       toast(`Trade execution failed on ${failCount} wallets`, "error");
     }
   };
@@ -643,6 +688,114 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
           </button>
         )}
       </div>
+
+      {/* 4. Trade Receipt & Verification Card */}
+      {lastTradeReceipt && (
+        <div
+          style={{
+            marginTop: "16px",
+            padding: "14px 18px",
+            borderRadius: "8px",
+            background: lastTradeReceipt.success ? "rgba(34, 197, 94, 0.08)" : "rgba(239, 68, 68, 0.08)",
+            border: `1px solid ${lastTradeReceipt.success ? "rgba(34, 197, 94, 0.3)" : "rgba(239, 68, 68, 0.3)"}`,
+            display: "flex",
+            flexDirection: "column",
+            gap: "10px",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <span
+                style={{
+                  fontSize: "11px",
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  padding: "3px 8px",
+                  borderRadius: "4px",
+                  background: lastTradeReceipt.success ? "rgba(34, 197, 94, 0.2)" : "rgba(239, 68, 68, 0.2)",
+                  color: lastTradeReceipt.success ? "#4ade80" : "#f87171",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                {lastTradeReceipt.success ? "✓ TRANSAKSI BERHASIL (SUCCESS)" : "✕ TRANSAKSI GAGAL (FAILED)"}
+              </span>
+              <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+                {lastTradeReceipt.action === "buy" ? "Pembelian Token DEX" : "Penjualan Token DEX"} · {new Date(lastTradeReceipt.timestamp).toLocaleTimeString()}
+              </span>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setLastTradeReceipt(null)}
+              style={{
+                background: "none",
+                border: "none",
+                color: "var(--text-dim)",
+                cursor: "pointer",
+                fontSize: "14px",
+                padding: "2px 6px",
+              }}
+              title="Tutup receipt"
+            >
+              ✕
+            </button>
+          </div>
+
+          {lastTradeReceipt.success ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+              {lastTradeReceipt.amountSent && (
+                <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text-main)" }}>
+                  Hasil Eksekusi: <span className="mono" style={{ color: "#4ade80" }}>{lastTradeReceipt.amountSent}</span>
+                </div>
+              )}
+
+              {lastTradeReceipt.walletAddress && (
+                <div style={{ fontSize: "11.5px", color: "var(--text-dim)" }}>
+                  Dompet Pemilik Token: <span className="mono" style={{ color: "var(--text-main)" }}>{lastTradeReceipt.walletAddress}</span>
+                </div>
+              )}
+
+              {lastTradeReceipt.txHash && (
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap", marginTop: "4px" }}>
+                  <span style={{ fontSize: "11px", color: "var(--text-dim)" }}>On-Chain Signature:</span>
+                  <span className="mono" style={{ fontSize: "11px", color: "var(--accent)", wordBreak: "break-all" }}>
+                    {lastTradeReceipt.txHash}
+                  </span>
+                  {lastTradeReceipt.explorerUrl && (
+                    <a
+                      href={lastTradeReceipt.explorerUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        fontSize: "11px",
+                        color: "#60a5fa",
+                        textDecoration: "underline",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "3px",
+                        fontWeight: 600,
+                        marginLeft: "4px",
+                      }}
+                    >
+                      Buka Bukti di Solscan ↗
+                    </a>
+                  )}
+                </div>
+              )}
+
+              <div style={{ fontSize: "11px", color: "#4ade80", marginTop: "4px" }}>
+                ✓ Saldo dompet otomatis dipindai ulang. Token hasil swap dapat Anda cek langsung di tab <b>Tokens</b> pada detail dompet tersebut.
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: "12px", color: "#f87171" }}>
+              Penyebab: {lastTradeReceipt.error || "Gagal mengeksekusi swap on-chain. Pastikan saldo SOL mencukupi gas fee dan likuiditas pool tersedia."}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
