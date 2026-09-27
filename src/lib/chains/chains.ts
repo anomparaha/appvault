@@ -20,9 +20,9 @@ export const CHAINS = [
     short: "ETH",
     family: "evm" as const,
     rpcs: [
-      "https://ethereum.publicnode.com",
-      "https://eth.drpc.org",
       "https://cloudflare-eth.com",
+      "https://eth.drpc.org",
+      "https://ethereum.publicnode.com",
       "https://rpc.ankr.com/eth",
     ],
     symbol: "ETH",

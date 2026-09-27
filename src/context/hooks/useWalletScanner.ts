@@ -97,8 +97,17 @@ export function useWalletScanner({
         return { funded: 0, errors: 1 };
       }
       if (scanInProgressRef.current) {
-        toast('A balance sync is already running. Please try again shortly.', 'info');
-        return { funded: 0, errors: 1 };
+        // Wait a short moment if a quick background sync is currently concluding
+        let waitAttempts = 0;
+        while (scanInProgressRef.current && waitAttempts < 8) {
+          await new Promise((resolve) => setTimeout(resolve, 350));
+          waitAttempts++;
+        }
+
+        if (scanInProgressRef.current) {
+          toast('A balance sync is already running. Please try again shortly.', 'info');
+          return { funded: 0, errors: 0 };
+        }
       }
 
       scanInProgressRef.current = true;
@@ -213,6 +222,7 @@ export function useWalletScanner({
     const targets = list.filter(walletHasScanTarget);
     if (!targets.length) return;
     const { funded, errors } = await scanWallets(targets);
+    if (scanCancelledRef.current) return;
     logActivity({
       type: "scan",
       title: "Multi-Chain Balance Scan Completed",

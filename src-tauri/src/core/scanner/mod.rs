@@ -75,9 +75,9 @@ pub const CHAINS: &[ChainConfig] = &[
     ChainConfig {
         key: "eth",
         rpcs: &[
-            "https://ethereum.publicnode.com",
-            "https://eth.drpc.org",
             "https://cloudflare-eth.com",
+            "https://eth.drpc.org",
+            "https://ethereum.publicnode.com",
         ],
         symbol: "ETH",
         kind: ChainKind::Evm,
