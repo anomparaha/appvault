@@ -1,7 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
+import { PublicKey } from "@solana/web3.js";
 import { formatEther, parseUnits, toBigInt } from "../utils/format";
 import { shortAddr } from "../wallets/wallet";
-import { SOL_MINT, fetchJupiterQuote, buildStealthDexSellMessage, buildDexBuyMessage } from "../../services/jupiterSwapService";
+import {
+  SOL_MINT,
+  fetchJupiterQuote,
+  buildStealthDexSellMessage,
+  buildDexBuyMessage,
+  findAssociatedTokenAddress,
+  DEFAULT_TOKEN_PROGRAM_ID,
+} from "../../services/jupiterSwapService";
 
 export interface SolanaAccountDetails {
   exists?: boolean;
@@ -1019,4 +1027,148 @@ export async function executeTokenDexBuySingle(
     };
   }
 }
+
+export async function estimateMasterDexBuySweep(
+  targetWalletId: number,
+  targetWalletAddress: string,
+  token: { mint: string; symbol: string; decimals?: number },
+  buyAmountSol: number,
+  masterWalletId: number,
+  masterWalletSolBalance: number,
+  slippageBps: number = 250,
+): Promise<DexBuyEstimate> {
+  const decimals = token.decimals ?? 6;
+  const buyLamports = BigInt(Math.floor(buyAmountSol * 1e9));
+
+  try {
+    const quote = await fetchJupiterQuote(SOL_MINT, token.mint, buyLamports.toString(), slippageBps);
+    const rawTokensOut = BigInt(quote.outAmount || "0");
+    const factor = 10 ** decimals;
+    const estTokens = (Number(rawTokensOut) / factor).toFixed(decimals > 6 ? 4 : 2);
+
+    const isMasterFunded = masterWalletSolBalance >= buyAmountSol;
+
+    return {
+      walletId: targetWalletId,
+      address: targetWalletAddress,
+      balanceWei: 0n,
+      balanceFormatted: "0 SOL (Sub-Wallet)",
+      feeWei: 0n,
+      feeFormatted: "0 SOL (Master Paid 👑)",
+      netWei: rawTokensOut,
+      netFormatted: `~${estTokens} ${token.symbol}`,
+      isSweepable: isMasterFunded,
+      statusText: isMasterFunded ? "Ready (Master Funded 👑)" : `Master Low SOL (Needs ${buyAmountSol} SOL)`,
+      isSponsored: true,
+      feePayerWalletId: masterWalletId,
+      tokenSymbol: token.symbol,
+      tokenMint: token.mint,
+      tokenDecimals: decimals,
+      estimatedTokensOut: estTokens,
+      priceImpactPct: quote.priceImpactPct,
+    };
+  } catch (err) {
+    return {
+      walletId: targetWalletId,
+      address: targetWalletAddress,
+      balanceWei: 0n,
+      balanceFormatted: "0 SOL",
+      feeWei: 0n,
+      feeFormatted: "—",
+      netWei: 0n,
+      netFormatted: `0 ${token.symbol}`,
+      isSweepable: false,
+      statusText: `Quote Error: ${String(err).slice(0, 45)}...`,
+      isSponsored: true,
+      feePayerWalletId: masterWalletId,
+      tokenSymbol: token.symbol,
+      tokenMint: token.mint,
+    };
+  }
+}
+
+export async function executeMasterDexBuySingle(
+  masterWalletId: number,
+  sessionToken: string,
+  masterAddress: string,
+  targetWalletAddress: string,
+  token: { mint: string; symbol: string; decimals?: number; programId?: string },
+  buyAmountSol: number,
+  slippageBps: number = 250,
+): Promise<SweepTxResult> {
+  const cfg = SWEEP_CHAINS.sol;
+  const decimals = token.decimals ?? 6;
+  const buyLamports = BigInt(Math.floor(buyAmountSol * 1e9));
+
+  try {
+    if (buyLamports <= 0n) {
+      return {
+        walletId: masterWalletId,
+        address: targetWalletAddress,
+        success: false,
+        error: "Buy amount must be > 0 SOL",
+      };
+    }
+
+    // 1. Fetch live Jupiter quote (Master SOL -> Target Token)
+    const quote = await fetchJupiterQuote(SOL_MINT, token.mint, buyLamports.toString(), slippageBps);
+
+    // 2. Derive target wallet's ATA deterministically
+    const tokProg = token.programId ? new PublicKey(token.programId) : DEFAULT_TOKEN_PROGRAM_ID;
+    const targetAta = findAssociatedTokenAddress(
+      new PublicKey(targetWalletAddress),
+      new PublicKey(token.mint),
+      tokProg
+    );
+
+    // 3. Build DEX Buy Versioned Message with Idempotent ATA creation funded by Master
+    const { messageBase64 } = await buildDexBuyMessage(
+      quote,
+      masterAddress,
+      masterAddress,
+      targetAta.toBase58(),
+      targetWalletAddress,
+      token.programId
+    );
+
+    interface SolanaSignResult {
+      rawTxBase64: string;
+      fromAddress: string;
+    }
+
+    // 4. Sign natively in Rust using Master Wallet
+    const signResult = await invoke<SolanaSignResult>("sign_solana_versioned_tx_scoped", {
+      walletId: masterWalletId,
+      sessionToken,
+      tx: {
+        messageBase64,
+        feePayerWalletId: null,
+      },
+    });
+
+    // 5. Broadcast to Solana RPC
+    const txHash = await invoke<string>("broadcast_solana_tx", {
+      rawTxBase64: signResult.rawTxBase64,
+    });
+
+    const estTokens = (Number(quote.outAmount) / (10 ** decimals)).toFixed(decimals > 6 ? 4 : 2);
+
+    return {
+      walletId: masterWalletId,
+      address: targetWalletAddress,
+      success: true,
+      txHash,
+      explorerUrl: `${cfg.explorerUrl}${txHash}`,
+      amountSent: `${buyAmountSol} SOL → +${estTokens} ${token.symbol}`,
+    };
+  } catch (err) {
+    return {
+      walletId: masterWalletId,
+      address: targetWalletAddress,
+      success: false,
+      error: String(err),
+    };
+  }
+}
+
 

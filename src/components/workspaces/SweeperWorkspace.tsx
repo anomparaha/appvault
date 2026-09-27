@@ -7,10 +7,12 @@ import {
   estimateTokenWalletSweep,
   estimateTokenDexSellSweep,
   estimateTokenDexBuySweep,
+  estimateMasterDexBuySweep,
   executeSweepSingle,
   executeTokenSweepSingle,
   executeTokenDexSellSingle,
   executeTokenDexBuySingle,
+  executeMasterDexBuySingle,
   type WalletSweepEstimate,
   type SweepTxResult,
 } from "../../lib/services/sweeper";
@@ -55,6 +57,7 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
   const [feePayerWalletId, setFeePayerWalletId] = useState<number | null>(null);
   const [tokenAction, setTokenAction] = useState<"transfer" | "dex_sell" | "dex_buy">("dex_sell");
   const [buyAmountSol, setBuyAmountSol] = useState<string>("0.05");
+  const [buyFundingMode, setBuyFundingMode] = useState<"master" | "distributed">("master");
   const [slippageBps, setSlippageBps] = useState<number>(250);
   const [showWinRate, setShowWinRate] = useState<boolean>(false);
 
@@ -169,6 +172,11 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
       .sort((a, b) => b.solBalance - a.solBalance);
   }, [wallets]);
 
+  // Selected Master Wallet (for Gas Sponsorship and Master Buy Funding)
+  const selectedMasterWallet = useMemo(() => {
+    return solCandidateFeePayers.find((c) => c.id === feePayerWalletId) || solCandidateFeePayers[0];
+  }, [solCandidateFeePayers, feePayerWalletId]);
+
   // Auto-select best Fee Payer (wallet with highest SOL)
   useEffect(() => {
     if (chainKey === "sol" && feePayerWalletId === null && solCandidateFeePayers.length > 0) {
@@ -230,14 +238,24 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
                 slippageBps
               )
             : tokenAction === "dex_buy"
-            ? await estimateTokenDexBuySweep(
-                w.id,
-                addr,
-                { mint: activeTokenMint, symbol: activeTokenInfo?.symbol || "TOKEN", decimals: activeTokenInfo?.decimals },
-                parseFloat(buyAmountSol) || 0.05,
-                feePayerWalletId ?? undefined,
-                slippageBps
-              )
+            ? (buyFundingMode === "master"
+                ? await estimateMasterDexBuySweep(
+                    w.id,
+                    addr,
+                    { mint: activeTokenMint, symbol: activeTokenInfo?.symbol || "TOKEN", decimals: activeTokenInfo?.decimals },
+                    parseFloat(buyAmountSol) || 0.05,
+                    selectedMasterWallet?.id ?? w.id,
+                    selectedMasterWallet?.solBalance ?? 0,
+                    slippageBps
+                  )
+                : await estimateTokenDexBuySweep(
+                    w.id,
+                    addr,
+                    { mint: activeTokenMint, symbol: activeTokenInfo?.symbol || "TOKEN", decimals: activeTokenInfo?.decimals },
+                    parseFloat(buyAmountSol) || 0.05,
+                    feePayerWalletId ?? undefined,
+                    slippageBps
+                  ))
             : await estimateTokenWalletSweep(
                 w.id,
                 addr,
@@ -269,7 +287,7 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
     return () => {
       active = false;
     };
-  }, [chainKey, gasPriceGwei, targetWallets, assetMode, activeTokenMint, feePayerWalletId, isEvmChain, activeTokenInfo, tokenAction, buyAmountSol, slippageBps]);
+  }, [chainKey, gasPriceGwei, targetWallets, assetMode, activeTokenMint, feePayerWalletId, isEvmChain, activeTokenInfo, tokenAction, buyAmountSol, slippageBps, buyFundingMode, selectedMasterWallet]);
 
   const isRecipientRequired = !(chainKey === "sol" && assetMode === "token" && tokenAction === "dex_buy");
   const validRecipient = !isRecipientRequired
@@ -348,15 +366,26 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
           `Sub-wallets do NOT need SOL and will NOT receive SOL. The entire SOL yield is delivered straight to the Recipient Address above.\n\n` +
           `Proceed with DEX swap broadcast?`
         : isDexBuy
-        ? `🛒 CONFIRM BATCH DEX BUY (SOL -> TOKEN)\n\n` +
-          `Token to Buy: ${activeTokenInfo?.symbol || "SPL Token"} (Mint: ${shortAddr(activeTokenMint)})\n` +
-          `Wallets Participating: ${sweepableWallets.length}\n` +
-          `Buy Amount per Wallet: ${buyAmountSol} SOL\n` +
-          `Est. Total Output: ${totalNetFormatted}\n` +
-          `Slippage: ${(slippageBps / 100).toFixed(1)}%\n` +
-          `Gas Sponsor: ${feePayerWalletId ? "Single-Funder Active" : "Self-Funded"}\n\n` +
-          `Each participating wallet will swap ${buyAmountSol} SOL for ${activeTokenInfo?.symbol || "SPL Token"} via Jupiter DEX.\n\n` +
-          `Proceed with Jupiter Batch Buy?`
+        ? (buyFundingMode === "master"
+          ? `👑 CONFIRM MASTER-FUNDED BATCH BUY (SUB-WALLETS 0 SOL)\n\n` +
+            `Master Funding Wallet: ${selectedMasterWallet?.label || `Wallet #${selectedMasterWallet?.id || 1}`} (${shortAddr(selectedMasterWallet?.address || "")}) (Balance: ${selectedMasterWallet?.solFormatted || "0 SOL"})\n` +
+            `Token to Buy: ${activeTokenInfo?.symbol || "SPL Token"} (Mint: ${shortAddr(activeTokenMint)})\n` +
+            `Recipient Sub-Wallets: ${sweepableWallets.length}\n` +
+            `Buy Amount per Wallet: ${buyAmountSol} SOL\n` +
+            `Total SOL to Spend: ${(parseFloat(buyAmountSol) * sweepableWallets.length).toFixed(3)} SOL\n` +
+            `Est. Total Output: ${totalNetFormatted}\n` +
+            `Slippage: ${(slippageBps / 100).toFixed(1)}%\n\n` +
+            `Dompet Master akan memotong modal SOL dan gas fee. Sub-wallets menerima token langsung di akun ATA masing-masing tanpa perlu isi SOL sama sekali.\n\n` +
+            `Lanjutkan pembelian via Jupiter?`
+          : `🛒 CONFIRM DISTRIBUTED BATCH BUY (TIAP DOMPET SENDIRI)\n\n` +
+            `Token to Buy: ${activeTokenInfo?.symbol || "SPL Token"} (Mint: ${shortAddr(activeTokenMint)})\n` +
+            `Wallets Participating: ${sweepableWallets.length}\n` +
+            `Buy Amount per Wallet: ${buyAmountSol} SOL\n` +
+            `Est. Total Output: ${totalNetFormatted}\n` +
+            `Slippage: ${(slippageBps / 100).toFixed(1)}%\n` +
+            `Gas Sponsor: ${feePayerWalletId ? "Single-Funder Active" : "Self-Funded"}\n\n` +
+            `Masing-masing dompet akan memotong saldo ${buyAmountSol} SOL miliknya sendiri untuk swap via Jupiter DEX.\n\n` +
+            `Lanjutkan pembelian terdistribusi?`)
         : `⚠️ CONFIRM FUNDS SWEEP (BLOCKCHAIN BROADCAST)\n\n` +
           `Network: ${activeChain.name} (${chainKey === "sol" && assetMode === "token" ? `Token: ${activeTokenInfo?.symbol || "SPL Token"}` : activeChain.symbol})\n` +
           `Target Wallets: ${sweepableWallets.length}\n` +
@@ -415,31 +444,62 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
             slippageBps
           );
         } else if (tokenAction === "dex_buy") {
-          setSweepProgress({
-            current: i + 1,
-            total: sweepableWallets.length,
-            msg: `Buying ${tokenSym} with ${buyAmountSol} SOL on wallet ${shortAddr(fromAddr)}...`,
-          });
+          if (buyFundingMode === "master") {
+            const masterWallet = selectedMasterWallet;
+            if (!masterWallet) {
+              toast("No Master Wallet with SOL found to fund purchases", "error");
+              setSweeping(false);
+              setSweepProgress(null);
+              return;
+            }
 
-          const feePayerAddr = feePayerWalletId
-            ? wallets.find((x) => x.id === feePayerWalletId)?.solAddress || fromAddr
-            : fromAddr;
+            setSweepProgress({
+              current: i + 1,
+              total: sweepableWallets.length,
+              msg: `Master funding ${buyAmountSol} SOL purchase of ${tokenSym} for wallet ${shortAddr(fromAddr)}...`,
+            });
 
-          res = await executeTokenDexBuySingle(
-            w.id,
-            sessionToken,
-            feePayerWalletId ?? undefined,
-            feePayerAddr,
-            fromAddr,
-            {
-              mint: activeTokenMint,
-              symbol: tokenSym,
-              decimals: activeTokenInfo?.decimals ?? 6,
-            },
-            parseFloat(buyAmountSol) || 0.05,
-            recipient.trim() || undefined,
-            slippageBps
-          );
+            res = await executeMasterDexBuySingle(
+              masterWallet.id,
+              sessionToken,
+              masterWallet.address,
+              fromAddr,
+              {
+                mint: activeTokenMint,
+                symbol: tokenSym,
+                decimals: activeTokenInfo?.decimals ?? 6,
+                programId: activeTokenInfo?.programId,
+              },
+              parseFloat(buyAmountSol) || 0.05,
+              slippageBps
+            );
+          } else {
+            setSweepProgress({
+              current: i + 1,
+              total: sweepableWallets.length,
+              msg: `Buying ${tokenSym} with ${buyAmountSol} SOL on wallet ${shortAddr(fromAddr)}...`,
+            });
+
+            const feePayerAddr = feePayerWalletId
+              ? wallets.find((x) => x.id === feePayerWalletId)?.solAddress || fromAddr
+              : fromAddr;
+
+            res = await executeTokenDexBuySingle(
+              w.id,
+              sessionToken,
+              feePayerWalletId ?? undefined,
+              feePayerAddr,
+              fromAddr,
+              {
+                mint: activeTokenMint,
+                symbol: tokenSym,
+                decimals: activeTokenInfo?.decimals ?? 6,
+              },
+              parseFloat(buyAmountSol) || 0.05,
+              recipient.trim() || undefined,
+              slippageBps
+            );
+          }
         } else {
           setSweepProgress({
             current: i + 1,
@@ -472,7 +532,9 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
             logActivity({
               type: "trade",
               title: `DEX Bought ${tokenSym}`,
-              desc: `Purchased with ${buyAmountSol} SOL on wallet ${shortAddr(fromAddr)} ${feePayerWalletId && feePayerWalletId !== w.id ? "(Gas Sponsored)" : ""}`,
+              desc: buyFundingMode === "master"
+                ? `Bought with ${buyAmountSol} SOL for wallet ${shortAddr(fromAddr)} (Funded by Master ${shortAddr(selectedMasterWallet?.address || "")} 👑)`
+                : `Purchased with ${buyAmountSol} SOL on wallet ${shortAddr(fromAddr)} ${feePayerWalletId && feePayerWalletId !== w.id ? "(Gas Sponsored)" : ""}`,
               amount: res.amountSent,
               amountColor: "var(--ok)",
               status: "success",
@@ -873,6 +935,59 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
                   )}
                 </div>
               )}
+
+              {assetMode === "token" && tokenAction === "dex_buy" && (
+                <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 8, width: "100%", flexWrap: "wrap", padding: "8px 12px", background: "rgba(245, 158, 11, 0.05)", borderRadius: "6px", border: "1px solid rgba(245, 158, 11, 0.2)" }}>
+                  <span style={{ fontSize: "11px", fontWeight: 700, color: "#fbbf24", textTransform: "uppercase" }}>
+                    Sumber Modal Pembelian SOL:
+                  </span>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    <button
+                      type="button"
+                      className={`network-pill-btn ${buyFundingMode === "master" ? "active" : ""}`}
+                      onClick={() => setBuyFundingMode("master")}
+                      style={{
+                        padding: "4px 12px",
+                        fontSize: "11px",
+                        height: "auto",
+                        background: buyFundingMode === "master" ? "rgba(245,158,11,0.25)" : undefined,
+                        borderColor: buyFundingMode === "master" ? "#f59e0b" : undefined,
+                        color: buyFundingMode === "master" ? "#fbbf24" : undefined,
+                        fontWeight: 700,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 5,
+                      }}
+                    >
+                      👑 1 Dompet Master (Sub-wallet 0 SOL)
+                    </button>
+                    <button
+                      type="button"
+                      className={`network-pill-btn ${buyFundingMode === "distributed" ? "active" : ""}`}
+                      onClick={() => setBuyFundingMode("distributed")}
+                      style={{
+                        padding: "4px 12px",
+                        fontSize: "11px",
+                        height: "auto",
+                        background: buyFundingMode === "distributed" ? "rgba(59,130,246,0.25)" : undefined,
+                        borderColor: buyFundingMode === "distributed" ? "#3b82f6" : undefined,
+                        color: buyFundingMode === "distributed" ? "#60a5fa" : undefined,
+                        fontWeight: 700,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 5,
+                      }}
+                    >
+                      👥 Tiap Dompet Sendiri (Distributed)
+                    </button>
+                  </div>
+                  <span style={{ fontSize: "11px", color: "var(--text-dim)", marginLeft: "auto" }}>
+                    {buyFundingMode === "master"
+                      ? `👑 Dompet Master bayar ${(sweepableWallets.length * (parseFloat(buyAmountSol) || 0.05)).toFixed(3)} SOL untuk ${sweepableWallets.length} dompet. Sub-wallet butuh 0 SOL!`
+                      : `👥 Tiap dompet wajib memiliki minimal ${buyAmountSol} SOL untuk modal pembelian mandiri.`}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1045,9 +1160,17 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
           ) : (
             <div className="sweeper-deck-col col-gas">
               <div className="deck-col-header">
-                <span className="deck-col-label">3. GAS FEE SPONSOR (FEE PAYER)</span>
-                <span className="deck-gas-live mono text-emerald">
-                  {feePayerWalletId ? "Single-Funder Active" : "Self-Funded"}
+                <span className="deck-col-label">
+                  {tokenAction === "dex_buy" && buyFundingMode === "master"
+                    ? "3. MASTER FUNDING WALLET (SOL MODAL & GAS)"
+                    : "3. GAS FEE SPONSOR (FEE PAYER)"}
+                </span>
+                <span className="deck-gas-live mono" style={{ color: tokenAction === "dex_buy" && buyFundingMode === "master" ? "#fbbf24" : "var(--ok)" }}>
+                  {tokenAction === "dex_buy" && buyFundingMode === "master"
+                    ? "👑 1-Wallet Funder Active"
+                    : feePayerWalletId
+                    ? "Single-Funder Active"
+                    : "Self-Funded"}
                 </span>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -1063,7 +1186,7 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
                     width: "100%",
                     cursor: "pointer",
                   }}
-                  value={feePayerWalletId ?? "self"}
+                  value={feePayerWalletId ?? selectedMasterWallet?.id ?? "self"}
                   onChange={(e) => {
                     const val = e.target.value;
                     setFeePayerWalletId(val === "self" ? null : parseInt(val, 10));
@@ -1072,22 +1195,28 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
                 >
                   {solCandidateFeePayers.map((c, i) => (
                     <option key={c.id} value={c.id}>
-                      Wallet #{i + 1} ({shortAddr(c.address)}) — {c.solFormatted} {i === 0 && c.solBalance >= 0.001 ? "★ Primary Gas Sponsor" : ""}
+                      Wallet #{i + 1} ({shortAddr(c.address)}) — {c.solFormatted} {i === 0 && c.solBalance >= 0.001 ? "★ Primary Master Funder" : ""}
                     </option>
                   ))}
-                  <option value="self">Self (Each sub-wallet pays its own 0.000005 SOL)</option>
+                  {!(tokenAction === "dex_buy" && buyFundingMode === "master") && (
+                    <option value="self">Self (Each sub-wallet pays its own gas / buy amount)</option>
+                  )}
                 </select>
                 <div style={{ fontSize: "11px", color: "var(--muted)", lineHeight: 1.4 }}>
-                  {feePayerWalletId ? (
+                  {tokenAction === "dex_buy" && buyFundingMode === "master" ? (
+                    <span style={{ color: "#fbbf24", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                      👑 <b>Mode 1 Dompet Master:</b> Dompet terpilih ({shortAddr(selectedMasterWallet?.address || "")}) menanggung modal {buyAmountSol} SOL per wallet (total: {(sweepableWallets.length * (parseFloat(buyAmountSol) || 0.05)).toFixed(3)} SOL) + gas. <b>Sub-wallets bebas 0 SOL!</b>
+                    </span>
+                  ) : feePayerWalletId ? (
                     <span style={{ color: "#34d399", display: "inline-flex", alignItems: "center", gap: 4 }}>
                       ✓ <b>Zero-SOL {tokenAction === "dex_sell" ? "Liquidator" : "Sweeper"}:</b> Sub-wallets need <b>0 SOL</b>! {tokenAction === "dex_sell" ? "Selected wallet sponsors gas fee; 100% of SOL proceeds go straight to Master Recipient." : "Selected wallet sponsors all gas & ATA creation fees."}
                     </span>
                   ) : solCandidateFeePayers.length === 0 ? (
                     <span style={{ color: "#fbbf24", display: "inline-flex", alignItems: "center", gap: 4 }}>
-                      ⚠️ <b>Perhatian:</b> Tidak ditemukan dompet bersaldo SOL. Impor/isi minimal 1 dompet dengan ~0.005 SOL sebagai Gas Sponsor.
+                      ⚠️ <b>Perhatian:</b> Tidak ditemukan dompet bersaldo SOL. Impor/isi minimal 1 dompet dengan SOL sebagai Gas Sponsor / Master Funder.
                     </span>
                   ) : (
-                    <span>⚠️ <b>Self-Funded Mode:</b> Sub-wallets must individually hold at least 0.000005 SOL for gas.</span>
+                    <span>⚠️ <b>Self-Funded Mode:</b> Sub-wallets must individually hold at least {tokenAction === "dex_buy" ? `${buyAmountSol} SOL` : "0.000005 SOL for gas"}.</span>
                   )}
                 </div>
               </div>
@@ -1202,8 +1331,21 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
                             </div>
                           )
                         ) : est?.isSweepable ? (
-                          <span className="status-badge ready" style={tokenAction === "dex_buy" ? { background: "rgba(59,130,246,0.15)", color: "#60a5fa", borderColor: "rgba(59,130,246,0.3)" } : undefined}>
-                            {est.isSponsored ? "Ready to Buy (Sponsored)" : "Ready to Buy"}
+                          <span
+                            className="status-badge ready"
+                            style={
+                              tokenAction === "dex_buy"
+                                ? buyFundingMode === "master"
+                                  ? { background: "rgba(245,158,11,0.15)", color: "#fbbf24", borderColor: "rgba(245,158,11,0.3)" }
+                                  : { background: "rgba(59,130,246,0.15)", color: "#60a5fa", borderColor: "rgba(59,130,246,0.3)" }
+                                : undefined
+                            }
+                          >
+                            {tokenAction === "dex_buy" && buyFundingMode === "master"
+                              ? "Ready (Master Funded 👑)"
+                              : est.isSponsored
+                              ? "Ready to Buy (Sponsored)"
+                              : "Ready to Buy"}
                           </span>
                         ) : (
                           <span className="status-badge dust" data-tooltip={est?.statusText}>{est?.statusText || "Insufficient Gas"}</span>
@@ -1242,11 +1384,17 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
           disabled={sweeping || sweepableWallets.length === 0 || !validRecipient}
           style={
             tokenAction === "dex_buy"
-              ? {
-                  background: "linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)",
-                  borderColor: "#60a5fa",
-                  boxShadow: "0 4px 14px rgba(37, 99, 235, 0.3)",
-                }
+              ? buyFundingMode === "master"
+                ? {
+                    background: "linear-gradient(135deg, #d97706 0%, #f59e0b 100%)",
+                    borderColor: "#fbbf24",
+                    boxShadow: "0 4px 14px rgba(245, 158, 11, 0.3)",
+                  }
+                : {
+                    background: "linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)",
+                    borderColor: "#60a5fa",
+                    boxShadow: "0 4px 14px rgba(37, 99, 235, 0.3)",
+                  }
               : tokenAction === "dex_sell" && chainKey === "sol" && assetMode === "token"
               ? {
                   background: "linear-gradient(135deg, #059669 0%, #10b981 100%)",
@@ -1258,12 +1406,16 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
         >
           {sweeping
             ? tokenAction === "dex_buy"
-              ? `Buying on DEX (${sweepProgress?.current || 0}/${sweepProgress?.total || 0})…`
+              ? buyFundingMode === "master"
+                ? `Master Funding Buys (${sweepProgress?.current || 0}/${sweepProgress?.total || 0})…`
+                : `Buying on DEX (${sweepProgress?.current || 0}/${sweepProgress?.total || 0})…`
               : tokenAction === "dex_sell" && chainKey === "sol" && assetMode === "token"
               ? `Liquidating on DEX (${sweepProgress?.current || 0}/${sweepProgress?.total || 0})…`
               : `Sweeping (${sweepProgress?.current || 0}/${sweepProgress?.total || 0})…`
             : tokenAction === "dex_buy"
-            ? <><IconZap size={14} /> Execute Batch DEX Buy ({sweepableWallets.length} Wallets)</>
+            ? buyFundingMode === "master"
+              ? <><IconZap size={14} /> Execute Master-Funded DEX Buy ({sweepableWallets.length} Wallets)</>
+              : <><IconZap size={14} /> Execute Distributed DEX Buy ({sweepableWallets.length} Wallets)</>
             : tokenAction === "dex_sell" && chainKey === "sol" && assetMode === "token"
             ? <><IconZap size={14} /> Execute Stealth DEX Sell ({sweepableWallets.length} Wallets)</>
             : <><IconZap size={14} /> Execute {chainKey === "sol" && assetMode === "token" ? `${activeTokenInfo?.symbol || "Token"} ` : ""}Sweep ({sweepableWallets.length} Wallets)</>}

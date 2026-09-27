@@ -4,11 +4,33 @@ import {
   TransactionInstruction,
   TransactionMessage,
   AddressLookupTableAccount,
+  SystemProgram,
 } from "@solana/web3.js";
 import { invoke } from "@tauri-apps/api/core";
 import { Buffer } from "buffer";
 
 export const SOL_MINT = "So11111111111111111111111111111111111111112";
+export const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
+  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+);
+export const DEFAULT_TOKEN_PROGRAM_ID = new PublicKey(
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+);
+
+export function findAssociatedTokenAddress(
+  walletAddress: PublicKey,
+  tokenMintAddress: PublicKey,
+  tokenProgramId: PublicKey = DEFAULT_TOKEN_PROGRAM_ID,
+): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [
+      walletAddress.toBuffer(),
+      tokenProgramId.toBuffer(),
+      tokenMintAddress.toBuffer(),
+    ],
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+  )[0];
+}
 
 const JUPITER_API_ENDPOINTS = [
   "https://public.jupiterapi.com",
@@ -247,6 +269,8 @@ export async function buildDexBuyMessage(
   buyerWalletAddress: string,
   feePayerAddress: string,
   destinationAta?: string,
+  destinationOwner?: string,
+  tokenProgramId?: string,
   rpcUrl: string = "https://mainnet.helius-rpc.com/?api-key=f0adee34-1df4-45c6-b897-b93f4cad01c9",
 ): Promise<{ messageBase64: string; estimatedTokensOut: string; rawOutTokens: string }> {
   let instructionsData: SwapInstructionsResponse | null = null;
@@ -312,7 +336,29 @@ export async function buildDexBuyMessage(
     throw new Error(lastErr);
   }
 
+  // If destination ATA & owner are specified (e.g. Master Wallet funding for Sub-Wallet),
+  // guarantee the destination ATA exists via CreateIdempotent instruction.
+  const ataIxs: TransactionInstruction[] = [];
+  if (destinationAta && destinationOwner) {
+    const tokProg = new PublicKey(tokenProgramId || "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+    ataIxs.push(
+      new TransactionInstruction({
+        keys: [
+          { pubkey: new PublicKey(feePayerAddress), isSigner: true, isWritable: true },
+          { pubkey: new PublicKey(destinationAta), isSigner: false, isWritable: true },
+          { pubkey: new PublicKey(destinationOwner), isSigner: false, isWritable: false },
+          { pubkey: new PublicKey(quote.outputMint), isSigner: false, isWritable: false },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          { pubkey: tokProg, isSigner: false, isWritable: false },
+        ],
+        programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+        data: Buffer.from([1]), // 1 = CreateIdempotent
+      })
+    );
+  }
+
   const allIxs: TransactionInstruction[] = [
+    ...ataIxs,
     ...(instructionsData.computeBudgetInstructions || []).map(deserializeInstruction),
     ...(instructionsData.setupInstructions || []).map(deserializeInstruction),
     deserializeInstruction(instructionsData.swapInstruction),
