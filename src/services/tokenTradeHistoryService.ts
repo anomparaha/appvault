@@ -149,272 +149,37 @@ export function formatTokenPrice(num: number, isNative = false, chain?: string):
   return `$${formatted} USD`;
 }
 
-function getDefaultInitialPositions(): TokenTradePosition[] {
-  const ethUsdPrice = 2680;
-
-  // 1. Summa (SMA on Robinhood Chain) - PERSIS SEPERTI DI SCREENSHOT GMGN USER
-  // Masuk: MC $69.32K, Amount 56.86K SMA, Total Modal 0.00100 ETH ($2.68 USD)
-  // Harga Beli Masuk = $2.68 / 56,860 = $0.00004714 USD (0.00000001759 ETH)
-  // Keluar: MC $29.75K, Amount 56.46K SMA, Total Hasil Jual 0.00069 ETH ($1.85 USD)
-  // Harga Jual Keluar = $1.85 / 56,460 = $0.00003275 USD (0.00000001222 ETH)
-  // Hasil Riil: Minus -0.00031 ETH (-31.00%), Selisih USD: -$0.83 USD, Penurunan MC: -57.08%
-  const smaEntryMc = 69320;
-  const smaExitMc = 29750;
-  const smaEntryTotalEth = 0.001;
-  const smaExitTotalEth = 0.00069;
-  const smaEntryAmount = 56860;
-  const smaExitAmount = 56460;
-  const smaEntryEth = smaEntryTotalEth / smaEntryAmount;
-  const smaExitEth = smaExitTotalEth / smaExitAmount;
-  const smaEntryUsd = smaEntryEth * ethUsdPrice;
-  const smaExitUsd = smaExitEth * ethUsdPrice;
-  const smaPnlEth = smaExitTotalEth - smaEntryTotalEth; // -0.00031 ETH
-  const smaPnlUsd = (smaExitTotalEth * ethUsdPrice) - (smaEntryTotalEth * ethUsdPrice); // -$0.83 USD
-  const smaPnlPercent = ((smaExitTotalEth - smaEntryTotalEth) / smaEntryTotalEth) * 100; // -31.00%
-
-  // 2. OpenJEV (JEV on Robinhood Chain)
-  const jevEntryMc = 125500;
-  const jevExitMc = 95800;
-  const jevEntryUsd = 0.0004011;
-  const jevExitUsd = 0.0003064;
-  const jevEntryEth = jevEntryUsd / ethUsdPrice;
-  const jevExitEth = jevExitUsd / ethUsdPrice;
-  const jevEntryTotalEth = 0.0186;
-  const jevExitTotalEth = 0.0142;
-  const jevPnlEth = jevExitTotalEth - jevEntryTotalEth; // -0.0044 ETH
-  const jevPnlUsd = (jevExitTotalEth * ethUsdPrice) - (jevEntryTotalEth * ethUsdPrice);
-  const jevPnlPercent = ((jevExitTotalEth - jevEntryTotalEth) / jevEntryTotalEth) * 100; // -23.66%
-
-  // 3. Asteroid Shiba (ASTEROID on Robinhood Chain)
-  const astEntryMc = 84200;
-  const astExitMc = 46100;
-  const astEntryUsd = 0.000035;
-  const astExitUsd = 0.00001918;
-  const astEntryEth = astEntryUsd / ethUsdPrice;
-  const astExitEth = astExitUsd / ethUsdPrice;
-  const astEntryTotalEth = 0.0056;
-  const astExitTotalEth = 0.00307;
-  const astPnlEth = astExitTotalEth - astEntryTotalEth;
-  const astPnlUsd = (astExitTotalEth * ethUsdPrice) - (astEntryTotalEth * ethUsdPrice);
-  const astPnlPercent = ((astExitTotalEth - astEntryTotalEth) / astEntryTotalEth) * 100; // -45.18%
-
-  // 4. Global Dollar (USDG on Robinhood Chain)
-  const usdgEntryMc = 2500000;
-  const usdgExitMc = 660000;
-  const usdgEntryUsd = 1.0;
-  const usdgExitUsd = 0.2641;
-  const usdgEntryEth = usdgEntryUsd / ethUsdPrice;
-  const usdgExitEth = usdgExitUsd / ethUsdPrice;
-  const usdgEntryTotalEth = 0.00373;
-  const usdgExitTotalEth = 0.000985;
-  const usdgPnlEth = usdgExitTotalEth - usdgEntryTotalEth;
-  const usdgPnlUsd = (usdgExitTotalEth * ethUsdPrice) - (usdgEntryTotalEth * ethUsdPrice);
-  const usdgPnlPercent = ((usdgExitTotalEth - usdgEntryTotalEth) / usdgEntryTotalEth) * 100; // -73.59%
-
-  return [
-    {
-      id: "pos-sma",
-      walletId: 3,
-      walletLabel: "Wallet #3",
-      chain: "robinhood",
-      symbol: "SMA",
-      name: "Summa",
-      contractAddress: "0x3bd9136d51af679bd1b11d06b951155543c5449f",
-      holdAmount: 0, // Sudah terjual (Exit), sisa saldo hold = 0 SMA
-
-      entryTime: "24 Sep 2026, 10:15",
-      entryMc: smaEntryMc,
-      entryPriceUsd: smaEntryUsd,
-      entryPriceEth: smaEntryEth,
-      entryAmount: 56860,
-      entryTotalEth: smaEntryTotalEth,
-      entryTotalUsd: smaEntryTotalEth * ethUsdPrice,
-
-      isExited: true,
-      exitTime: "26 Sep 2026, 14:30",
-      exitMc: smaExitMc,
-      exitPriceUsd: smaExitUsd,
-      exitPriceEth: smaExitEth,
-      exitAmount: 56460,
-      exitTotalEth: smaExitTotalEth,
-      exitTotalUsd: smaExitTotalEth * ethUsdPrice,
-
-      pnlEth: smaPnlEth,
-      pnlUsd: smaPnlUsd,
-      pnlPercent: smaPnlPercent,
-      mcDiffPercent: ((smaExitMc - smaEntryMc) / smaEntryMc) * 100, // -57.08%
-      priceDiffPercent: ((smaExitUsd - smaEntryUsd) / smaEntryUsd) * 100, // -46.35%
-
-      buyPriceUsd: smaEntryUsd,
-      buyPriceEth: smaEntryEth,
-      currentPriceUsd: smaExitUsd,
-      currentPriceEth: smaExitEth,
-      priceDiffUsd: smaExitUsd - smaEntryUsd,
-      priceDiffEth: smaExitEth - smaEntryEth,
-
-      status: "sold",
-      buyDate: "2026-09-24",
-      notes: "Robinhood Chain DexScreener swap",
-    },
-    {
-      id: "pos-jev",
-      walletId: 3,
-      walletLabel: "Wallet #3",
-      chain: "robinhood",
-      symbol: "JEV",
-      name: "OpenJEV",
-      contractAddress: "0x4d066ab4d924b7b3d01c6ecbfc142efe33aeb7fa",
-      holdAmount: 124647.01,
-
-      entryTime: "22 Sep 2026, 09:00",
-      entryMc: jevEntryMc,
-      entryPriceUsd: jevEntryUsd,
-      entryPriceEth: jevEntryEth,
-      entryAmount: 124647.01,
-      entryTotalEth: jevEntryTotalEth,
-      entryTotalUsd: jevEntryTotalEth * ethUsdPrice,
-
-      isExited: false,
-      exitTime: "Live (Sedang Hold)",
-      exitMc: jevExitMc,
-      exitPriceUsd: jevExitUsd,
-      exitPriceEth: jevExitEth,
-      exitAmount: 124647.01,
-      exitTotalEth: jevExitTotalEth,
-      exitTotalUsd: jevExitTotalEth * ethUsdPrice,
-
-      pnlEth: jevPnlEth,
-      pnlUsd: jevPnlUsd,
-      pnlPercent: jevPnlPercent,
-      mcDiffPercent: ((jevExitMc - jevEntryMc) / jevEntryMc) * 100,
-      priceDiffPercent: ((jevExitUsd - jevEntryUsd) / jevEntryUsd) * 100,
-
-      buyPriceUsd: jevEntryUsd,
-      buyPriceEth: jevEntryEth,
-      currentPriceUsd: jevExitUsd,
-      currentPriceEth: jevExitEth,
-      priceDiffUsd: jevExitUsd - jevEntryUsd,
-      priceDiffEth: jevExitEth - jevEntryEth,
-
-      status: "holding",
-      buyDate: "2026-09-22",
-      notes: "Holding OpenJEV",
-    },
-    {
-      id: "pos-ast",
-      walletId: 3,
-      walletLabel: "Wallet #3",
-      chain: "robinhood",
-      symbol: "ASTEROID",
-      name: "Asteroid Shiba",
-      contractAddress: "0x38aaf33082b20aff2e33433138de920f131b7777",
-      holdAmount: 428571,
-
-      entryTime: "19 Sep 2026, 16:40",
-      entryMc: astEntryMc,
-      entryPriceUsd: astEntryUsd,
-      entryPriceEth: astEntryEth,
-      entryAmount: 428571,
-      entryTotalEth: astEntryTotalEth,
-      entryTotalUsd: astEntryTotalEth * ethUsdPrice,
-
-      isExited: false,
-      exitTime: "Live (Sedang Hold)",
-      exitMc: astExitMc,
-      exitPriceUsd: astExitUsd,
-      exitPriceEth: astExitEth,
-      exitAmount: 428571,
-      exitTotalEth: astExitTotalEth,
-      exitTotalUsd: astExitTotalEth * ethUsdPrice,
-
-      pnlEth: astPnlEth,
-      pnlUsd: astPnlUsd,
-      pnlPercent: astPnlPercent,
-      mcDiffPercent: ((astExitMc - astEntryMc) / astEntryMc) * 100,
-      priceDiffPercent: ((astExitUsd - astEntryUsd) / astEntryUsd) * 100,
-
-      buyPriceUsd: astEntryUsd,
-      buyPriceEth: astEntryEth,
-      currentPriceUsd: astExitUsd,
-      currentPriceEth: astExitEth,
-      priceDiffUsd: astExitUsd - astEntryUsd,
-      priceDiffEth: astExitEth - astEntryEth,
-
-      status: "drawdown",
-      buyDate: "2026-09-19",
-      notes: "Meme token",
-    },
-    {
-      id: "pos-usdg",
-      walletId: 3,
-      walletLabel: "Wallet #3",
-      chain: "robinhood",
-      symbol: "USDG",
-      name: "Global Dollar",
-      contractAddress: "0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168",
-      holdAmount: 10,
-
-      entryTime: "15 Sep 2026, 11:20",
-      entryMc: usdgEntryMc,
-      entryPriceUsd: usdgEntryUsd,
-      entryPriceEth: usdgEntryEth,
-      entryAmount: 10,
-      entryTotalEth: usdgEntryTotalEth,
-      entryTotalUsd: usdgEntryTotalEth * ethUsdPrice,
-
-      isExited: false,
-      exitTime: "Live (Sedang Hold)",
-      exitMc: usdgExitMc,
-      exitPriceUsd: usdgExitUsd,
-      exitPriceEth: usdgExitEth,
-      exitAmount: 10,
-      exitTotalEth: usdgExitTotalEth,
-      exitTotalUsd: usdgExitTotalEth * ethUsdPrice,
-
-      pnlEth: usdgPnlEth,
-      pnlUsd: usdgPnlUsd,
-      pnlPercent: usdgPnlPercent,
-      mcDiffPercent: ((usdgExitMc - usdgEntryMc) / usdgEntryMc) * 100,
-      priceDiffPercent: ((usdgExitUsd - usdgEntryUsd) / usdgEntryUsd) * 100,
-
-      buyPriceUsd: usdgEntryUsd,
-      buyPriceEth: usdgEntryEth,
-      currentPriceUsd: usdgExitUsd,
-      currentPriceEth: usdgExitEth,
-      priceDiffUsd: usdgExitUsd - usdgEntryUsd,
-      priceDiffEth: usdgExitEth - usdgEntryEth,
-
-      status: "drawdown",
-      buyDate: "2026-09-15",
-      notes: "Robinhood Chain Pool",
-    },
-  ];
-}
-
 export function getTradePositions(): TokenTradePosition[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      const initial = getDefaultInitialPositions();
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
-      return initial;
+      localStorage.setItem(STORAGE_KEY, "[]");
+      return [];
     }
+
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed.map((p: TokenTradePosition) => {
-        if (p.isExited || p.status === "sold") {
-          return { ...p, holdAmount: 0 };
-        }
-        return p;
-      });
+    if (!Array.isArray(parsed)) return [];
+
+    // These records were shipped as hard-coded demo trades in early builds.
+    // Remove them so a fresh vault never reports sample data as the user's P&L.
+    const demoIds = new Set(["pos-sma", "pos-jev", "pos-ast", "pos-usdg"]);
+    const realPositions = parsed.filter(
+      (position: TokenTradePosition) => !demoIds.has(position.id),
+    );
+    if (realPositions.length !== parsed.length) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(realPositions));
     }
-    const initial = getDefaultInitialPositions();
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
-    return initial;
+
+    return realPositions.map((position: TokenTradePosition) => {
+      if (position.isExited || position.status === "sold") {
+        return { ...position, holdAmount: 0 };
+      }
+      return position;
+    });
   } catch (err) {
     console.error("Failed to load trade positions:", err);
-    return getDefaultInitialPositions();
+    return [];
   }
 }
 
@@ -505,7 +270,7 @@ export function getTradeTransactions(positions: TokenTradePosition[]): TradeTran
 export function updatePositionBuyPrice(
   id: string,
   newBuyPriceUsd: number,
-  ethUsdPrice = 2680
+  ethUsdPrice = 0
 ): void {
   const list = getTradePositions();
   const idx = list.findIndex((p) => p.id === id);
@@ -545,22 +310,46 @@ export function addTradePosition(
     | "buyPriceEth"
   > & {
     id?: string;
-  }
+  },
+  options: {
+    livePriceEnabled?: boolean;
+    ethUsdPrice?: number;
+    sessionToken?: string;
+    isAirGapped?: boolean;
+    signal?: AbortSignal;
+  } = {},
 ): TokenTradePosition {
-  const ethUsdPrice = 2680;
-  const quote = getInitialTokenPrice(pos.symbol, pos.contractAddress, ethUsdPrice);
+  const ethUsdPrice = options.ethUsdPrice && options.ethUsdPrice > 0 ? options.ethUsdPrice : 0;
+  const quote = pos.isExited
+    ? { usd: 0, eth: 0 }
+    : getInitialTokenPrice(pos.symbol, pos.contractAddress, ethUsdPrice, pos.chain);
 
-  const exitPriceUsd = quote.usd > 0 ? quote.usd : pos.exitPriceUsd || pos.entryPriceUsd;
-  const exitPriceEth =
-    quote.eth > 0 ? quote.eth : (ethUsdPrice > 0 ? exitPriceUsd / ethUsdPrice : 0);
+  // A closed trade's manually entered sale price is historical data, not a live
+  // quote. Never replace it from cache or start a refresh for an exited trade.
+  const exitPriceUsd = pos.isExited
+    ? pos.exitPriceUsd
+    : quote.usd > 0
+      ? quote.usd
+      : pos.exitPriceUsd || pos.entryPriceUsd;
+  const exitPriceEth = pos.isExited
+    ? pos.exitPriceEth
+    : quote.eth > 0
+      ? quote.eth
+      : ethUsdPrice > 0
+        ? exitPriceUsd / ethUsdPrice
+        : pos.exitPriceEth || 0;
 
   const priceDiffUsd = exitPriceUsd - pos.entryPriceUsd;
   const priceDiffEth = exitPriceEth - pos.entryPriceEth;
   const priceDiffPercent =
     pos.entryPriceUsd > 0 ? (priceDiffUsd / pos.entryPriceUsd) * 100 : 0;
 
-  const exitTotalEth = pos.exitTotalEth > 0 ? pos.exitTotalEth : pos.entryTotalEth * (1 + priceDiffPercent / 100);
-  const exitTotalUsd = exitTotalEth * ethUsdPrice;
+  const exitTotalEth = pos.isExited
+    ? pos.exitTotalEth
+    : pos.exitTotalEth > 0
+      ? pos.exitTotalEth
+      : pos.entryTotalEth * (1 + priceDiffPercent / 100);
+  const exitTotalUsd = pos.isExited ? pos.exitTotalUsd : exitTotalEth * ethUsdPrice;
   const pnlEth = exitTotalEth - pos.entryTotalEth;
   const pnlUsd = exitTotalUsd - pos.entryTotalUsd;
   const pnlPercent = pos.entryTotalEth > 0 ? (pnlEth / pos.entryTotalEth) * 100 : 0;
@@ -590,10 +379,22 @@ export function addTradePosition(
   const updated = [newRecord, ...existing.filter((p) => p.id !== newRecord.id)];
   saveTradePositions(updated);
 
-  // Background fetch live quote
-  if (pos.contractAddress) {
-    fetchLiveTokenPrice(pos.contractAddress, ethUsdPrice).then((live) => {
-      if (live) {
+  // Fail closed: live P&L requests require an explicit online/unlocked context.
+  if (
+    !pos.isExited &&
+    pos.contractAddress &&
+    options.livePriceEnabled === true &&
+    options.sessionToken?.trim() &&
+    options.isAirGapped === false &&
+    Boolean(options.signal) &&
+    !options.signal?.aborted
+  ) {
+    fetchLiveTokenPrice(pos.contractAddress, ethUsdPrice, pos.chain, undefined, {
+      sessionToken: options.sessionToken,
+      isAirGapped: false,
+      signal: options.signal,
+    }).then((live) => {
+      if (live && !options.signal?.aborted) {
         updatePositionWithLivePrice(newRecord.id, live.usd, live.eth, ethUsdPrice);
       }
     });
@@ -612,7 +413,7 @@ export function updatePositionWithLivePrice(
   id: string,
   priceUsd: number,
   priceEth: number,
-  ethUsdPrice = 2680
+  ethUsdPrice = 0
 ): void {
   const list = getTradePositions();
   const idx = list.findIndex((p) => p.id === id);

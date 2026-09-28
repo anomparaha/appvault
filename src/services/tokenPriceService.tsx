@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo, useRef } from "react";
-import { balanceAmount } from "../lib/chains";
+import { useState, useEffect, useMemo } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { tokenBalanceAmount } from "../lib/chains/chains";
 
 export interface TokenPriceQuote {
   usd: number;
@@ -20,168 +21,350 @@ export function getChainNativeSymbol(chain?: string): string {
   return "ETH";
 }
 
-export function getDefaultNativeUsdPrice(nativeSymbol: string): number {
-  switch (nativeSymbol.toUpperCase()) {
-    case "SOL": return 180;
-    case "BNB": return 600;
-    case "BTC": return 95000;
-    case "POL":
-    case "MATIC": return 0.50;
-    case "AVAX": return 25;
-    case "FTM": return 0.70;
-    case "ETH":
-    default: return 2680;
-  }
+export const TRUSTED_TOKEN_SYMBOLS_BY_CHAIN: Record<string, Record<string, string>> = {
+  eth: {
+    "0xdac17f958d2ee523a2206206994597c13d831ec7": "USDT",
+    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48": "USDC",
+    "0x6b175474e89094c44da98b954eedeac495271d0f": "DAI",
+    "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599": "WBTC",
+    "0x514910771af9ca656af840dff83e8264ecf986ca": "LINK",
+    "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984": "UNI",
+    "0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce": "SHIB",
+    "0x6982508145454ce325ddbe47a25d4ec3d2311933": "PEPE",
+  },
+  bsc: {
+    "0x55d398326f99059ff775485246999027b3197955": "USDT",
+    "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d": "USDC",
+    "0xe9e7cea3dedca5984780bafc599bd69add087d56": "BUSD",
+    "0x0e09fabb73bd3ade0a17ecc321fd13a19e81ce82": "CAKE",
+    "0x1af3f329e8be154074d8769d1ffa4ee058b1dbc3": "DAI",
+    "0x7130d2a12b9bcbbfae4f2634d864a1ee1ce3ead9": "WBTC",
+  },
+  base: {
+    "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": "USDC",
+    "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca": "USDbC",
+    "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": "DAI",
+    "0x940181a94a35a4569e4529a3cdfb74e48fd98762": "AERO",
+  },
+  arb: {
+    "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9": "USDT",
+    "0xaf88d065e77c8cc2239327c5edb3a432268e5831": "USDC",
+    "0x912ce59144191c1204e64559fe8253a0e49e6548": "ARB",
+    "0xda10009cbd5d07dd0cecc6616156627511bb9813": "DAI",
+    "0x2f2a2543b76a4166549f7aab2e75bef0aefc5b0f": "WBTC",
+    "0xfc5a1a6eb0ba367c0e73da63a5cc324f9f4a2111": "GMX",
+  },
+  robinhood: {
+    "0xf890d3fe2be22c6259bbe9f607692c7168556c93": "$PLUR",
+    "0x2411cfb697efc0efd32a4e98f7be5ba098b671a5": "PLX",
+    "0x0bd7d308f8e1639fab988df18a8011f41eacad73": "WETH",
+    "0x5fc5360d0400a0fd4f2af552add042d716f1d168": "USDG",
+    "0x38aaf33082b20aff2e33433138de920f131b7777": "ASTEROID",
+    "0x6e96e5d84513996ef7df308af345f9283c4da284": "IB-ASTEROID",
+    "0x4d066ab4d924b7b3d01c6ecbfc142efe33aeb7fa": "JEV",
+    "0x3bd9136d51af679bd1b11d06b951155543c5449f": "SMA",
+  },
+  sol: {
+    "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v": "USDC",
+    "es9vmfrzacermjfrf4h2fyd4kconky11mcce8benwnyb": "USDT",
+    "dezxaz8z7pnrnrjjz3wxborgixca6xjnb7yab1ppb263": "BONK",
+    "jupyiwryjfskupiha7hker8vutaefosybkedznsdvcn": "JUP",
+    "4k3dyjzvzp8emzwuxbbcjevwskkk59s5icnly3qrkx6r": "RAY",
+    "ekpqgsjtjmfqkz9kqansqyxrcf8fbopzlhyxdm65zcjm": "WIF",
+    "msolzycxhdygdzu16g5qsh3i5k3z3kzk7ytfqcjm7so": "MSOL",
+    "bso13r4tkie4kuml71lshtppl2eubylfx6h9hp3piy1": "BSOL",
+    "j1toso1uck3rlmjorhttrvwy9hj7x8v9yyac6y7kgcpn": "JITOSOL",
+    "bobbytpe2kpajwh5tppky72knd2cwmtdya63bqo2yiks": "BOBBY",
+  },
+};
+
+function normalizeChainKey(chain?: string): string {
+  const value = (chain || "").toLowerCase();
+  if (value === "ethereum") return "eth";
+  if (value === "arbitrum") return "arb";
+  if (value === "solana") return "sol";
+  if (value === "rh") return "robinhood";
+  return value;
 }
 
-// In-memory cache for live DEX quotes
+function priceCacheKey(address: string, chain?: string): string {
+  return `${normalizeChainKey(chain) || "any"}:${address.trim().toLowerCase()}`;
+}
+
+// In-memory cache for live DEX quotes, shared requests, and short negative
+// cache so multiple token cards do not fan out duplicate provider calls.
 const priceCache = new Map<string, TokenPriceQuote>();
+interface PendingPriceFetch {
+  controller: AbortController;
+  consumers: number;
+  promise: Promise<TokenPriceQuote | null>;
+}
+const pendingPriceFetches = new Map<string, PendingPriceFetch>();
+const recentPriceMisses = new Map<string, number>();
 
-// Baseline market prices for known tokens (Robinhood Chain, Solana & Ecosystem)
-const BASELINE_PRICES: Record<string, { usd: number; eth: number; sol?: number; bnb?: number }> = {
-  // Go Cat (GOCAT on Solana SPL)
-  "gocat": { usd: 0.0001438, eth: 0.0000000536, sol: 0.000000799 },
-  "go cat": { usd: 0.0001438, eth: 0.0000000536, sol: 0.000000799 },
+export function cancelActiveTokenPriceRequests(): void {
+  for (const pending of pendingPriceFetches.values()) pending.controller.abort();
+}
 
-  // OpenJEV (JEV on Robinhood Chain)
-  "0x4d066ab4d924b7b3d01c6ecbfc142efe33aeb7fa": { usd: 0.0003003, eth: 0.0000001116 },
-  "jev": { usd: 0.0003003, eth: 0.0000001116 },
+function subscribeToPriceFetch(
+  pending: PendingPriceFetch,
+  signal?: AbortSignal,
+): Promise<TokenPriceQuote | null> {
+  if (signal?.aborted || pending.controller.signal.aborted) return Promise.resolve(null);
+  pending.consumers += 1;
 
-  // Summa (SMA on Robinhood Chain)
-  "0x3bd9136d51af679bd1b11d06b951155543c5449f": { usd: 0.00000456, eth: 0.000000001695 },
-  "sma": { usd: 0.00000456, eth: 0.000000001695 },
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (quote: TokenPriceQuote | null) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      pending.consumers = Math.max(0, pending.consumers - 1);
+      resolve(signal?.aborted ? null : quote);
+    };
+    const onAbort = () => {
+      settle(null);
+      if (pending.consumers === 0) pending.controller.abort();
+    };
 
-  // Asteroid Shiba (ASTEROID on Robinhood Chain)
-  "0x38aaf33082b20aff2e33433138de920f131b7777": { usd: 0.00001918, eth: 0.000000007131 },
-  "asteroid": { usd: 0.00001918, eth: 0.000000007131 },
-  "0x6e96e5d84513996ef7df308af345f9283c4da284": { usd: 0.00001918, eth: 0.000000007131 },
-  "ib-asteroid": { usd: 0.00001918, eth: 0.000000007131 },
+    signal?.addEventListener("abort", onAbort, { once: true });
+    // Close the small race between the initial aborted check and listener setup.
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    pending.promise.then(settle, () => settle(null));
+  });
+}
 
-  // Global Dollar (USDG / ROBIN on Robinhood Chain)
-  "0x5fc5360d0400a0fd4f2af552add042d716f1d168": { usd: 0.2641, eth: 0.0000985 },
-  "usdg": { usd: 1.0, eth: 0.000373 },
+async function readPriceResponseText(
+  response: Response,
+  maxBytes: number,
+  signal: AbortSignal,
+  verifyGate: () => Promise<void>,
+): Promise<string> {
+  const contentLength = Number(response.headers.get("content-length") || "0");
+  if (contentLength > maxBytes) throw new Error("Price response exceeds size limit");
+  if (!response.body) {
+    await verifyGate();
+    const text = await response.text();
+    await verifyGate();
+    if (new TextEncoder().encode(text).byteLength > maxBytes) {
+      throw new Error("Price response exceeds size limit");
+    }
+    return text;
+  }
 
-  // Plurivex ($PLUR / PLX Official)
-  "0xf890d3fe2be22c6259bbe9f607692c7168556c93": { usd: 0.10, eth: 0.0000373 },
-  "plur": { usd: 0.10, eth: 0.0000373 },
-  "$plur": { usd: 0.10, eth: 0.0000373 },
-  "plx": { usd: 0.10, eth: 0.0000373 },
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      if (signal.aborted) throw new DOMException("Price request was cancelled", "AbortError");
+      await verifyGate();
+      const { done, value } = await reader.read();
+      await verifyGate();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new Error("Price response exceeds size limit");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
 
-  // Bobby The Cat (Solana SPL)
-  "bobbytpe2kpajwh5tppky72knd2cwmtdya63bqo2yiks": { usd: 0.00000069, eth: 0.000000000257, sol: 0.00000000383 },
-  "bobby": { usd: 0.00000069, eth: 0.000000000257, sol: 0.00000000383 },
-};
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+}
 
 /**
  * Fetch live DEX quote from DexScreener with 60s cache.
  */
+function dexScreenerChainKey(chain?: string): string | null {
+  const normalized = normalizeChainKey(chain);
+  switch (normalized) {
+    case "eth": return "ethereum";
+    case "arb": return "arbitrum";
+    case "bsc": return "bsc";
+    case "base": return "base";
+    case "sol": return "solana";
+    case "robinhood": return "robinhood";
+    default: return null;
+  }
+}
+
+/**
+ * Fetch live DEX quote from DexScreener with a chain-aware 60s cache. A quote is
+ * accepted only when the requested contract is the base token in a liquid pair;
+ * DexScreener's priceNative is not a safe inverse quote for arbitrary quote-side tokens.
+ */
+export interface TokenPriceRequestContext {
+  sessionToken: string;
+  isAirGapped: boolean;
+  signal?: AbortSignal;
+}
+
+async function verifyTokenPriceNetworkAccess(
+  context: TokenPriceRequestContext,
+  signal: AbortSignal,
+): Promise<void> {
+  if (context.isAirGapped || !context.sessionToken.trim() || signal.aborted || context.signal?.aborted) {
+    throw new DOMException("Token price request is not authorized", "AbortError");
+  }
+  await invoke("verify_online_network_access", { sessionToken: context.sessionToken });
+  if (context.isAirGapped || !context.sessionToken.trim() || signal.aborted || context.signal?.aborted) {
+    throw new DOMException("Token price request was cancelled", "AbortError");
+  }
+}
+
 export async function fetchLiveTokenPrice(
   contractAddress: string,
-  ethUsdPrice = 2680,
+  ethUsdPrice = 0,
   chain?: string,
-  nativeUsdPrice?: number
+  nativeUsdPrice?: number,
+  requestContext?: TokenPriceRequestContext,
 ): Promise<TokenPriceQuote | null> {
   const normAddr = (contractAddress || "").trim().toLowerCase();
   if (!normAddr) return null;
 
+  const cacheKey = priceCacheKey(normAddr, chain);
   const now = Date.now();
-  const cached = priceCache.get(normAddr);
-  if (cached && now - cached.fetchedAt < 60000) {
-    return cached;
+  const cached = priceCache.get(cacheKey);
+  if (cached && now - cached.fetchedAt < 60_000) return cached;
+
+  // Fail closed: never start a DexScreener request without an unlocked vault and
+  // explicit Online mode. Cached quotes above remain available offline.
+  if (
+    !requestContext ||
+    !requestContext.sessionToken.trim() ||
+    requestContext.isAirGapped ||
+    requestContext.signal?.aborted
+  ) return null;
+
+  const pending = pendingPriceFetches.get(cacheKey);
+  if (pending && !pending.controller.signal.aborted) {
+    return subscribeToPriceFetch(pending, requestContext.signal);
   }
+  if (pending) pendingPriceFetches.delete(cacheKey);
+  const lastMissAt = recentPriceMisses.get(cacheKey);
+  if (lastMissAt !== undefined && now - lastMissAt < 20_000) return null;
 
-  try {
-    const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${normAddr}`, {
-      headers: { Accept: "application/json" },
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    const pair = data.pairs?.[0];
-
-    if (pair) {
-      const usd = parseFloat(pair.priceUsd || "0") || 0;
-      const pairChain = (pair.chainId || chain || "").toLowerCase();
-      const nativeSymbol = getChainNativeSymbol(pairChain);
-      const pairNativePrice = parseFloat(pair.priceNative || "0") || 0;
-
-      const effNativeUsd = (nativeUsdPrice && nativeUsdPrice > 0)
-        ? nativeUsdPrice
-        : getDefaultNativeUsdPrice(nativeSymbol);
-
-      const effEthUsd = ethUsdPrice > 0 ? ethUsdPrice : 2680;
-      const eth = effEthUsd > 0 ? usd / effEthUsd : 0;
-      const nativePrice = pairNativePrice > 0 ? pairNativePrice : (effNativeUsd > 0 ? usd / effNativeUsd : 0);
-
-      const quote: TokenPriceQuote = { usd, eth, nativePrice, nativeSymbol, fetchedAt: now };
-      priceCache.set(normAddr, quote);
-      return quote;
+  const controller = new AbortController();
+  const verifyActiveGate = async () => {
+    try {
+      await verifyTokenPriceNetworkAccess(requestContext, controller.signal);
+    } catch (error) {
+      controller.abort();
+      throw error;
     }
-  } catch (err) {
-    // Fail silently to baseline fallback
-  }
+  };
+  let timedOut = false;
+  const timeoutId = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, 10_000);
+  const pendingRequest: PendingPriceFetch = {
+    controller,
+    consumers: 0,
+    promise: Promise.resolve(null),
+  };
+  pendingRequest.promise = (async (): Promise<TokenPriceQuote | null> => {
+    try {
+      await verifyActiveGate();
+      const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${encodeURIComponent(normAddr)}`, {
+        headers: { Accept: "application/json" },
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted) return null;
+      await verifyActiveGate();
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const body = await readPriceResponseText(res, 1_000_000, controller.signal, verifyActiveGate);
+      if (controller.signal.aborted) return null;
+      await verifyActiveGate();
+      const data = JSON.parse(body);
+      const expectedChain = dexScreenerChainKey(chain);
+      const pairs = Array.isArray(data.pairs) ? data.pairs : [];
+      const candidates = pairs
+        .filter((pair: any) => {
+          const baseAddress = String(pair.baseToken?.address || "").toLowerCase();
+          const pairChain = String(pair.chainId || "").toLowerCase();
+          return baseAddress === normAddr && (!expectedChain || pairChain === expectedChain);
+        })
+        .map((pair: any) => {
+          const usd = Number.parseFloat(String(pair.priceUsd || "0")) || 0;
+          const liquidityUsd = Number(pair.liquidity?.usd) || 0;
+          return { pair, usd, liquidityUsd };
+        })
+        .filter((candidate: { usd: number; liquidityUsd: number }) =>
+          Number.isFinite(candidate.usd) && candidate.usd > 0 && candidate.liquidityUsd > 0,
+        )
+        .sort((a: { liquidityUsd: number }, b: { liquidityUsd: number }) => b.liquidityUsd - a.liquidityUsd);
 
-  // Fallback to baseline if available
-  if (BASELINE_PRICES[normAddr]) {
-    const baseline = BASELINE_PRICES[normAddr];
-    const nativeSymbol = getChainNativeSymbol(chain);
-    const effNativeUsd = (nativeUsdPrice && nativeUsdPrice > 0)
-      ? nativeUsdPrice
-      : getDefaultNativeUsdPrice(nativeSymbol);
+      const best = candidates[0];
+      if (best) {
+        if (controller.signal.aborted) return null;
+        const pairChain = String(best.pair.chainId || chain || "").toLowerCase();
+        const nativeSymbol = getChainNativeSymbol(chain || pairChain);
+        const quote: TokenPriceQuote = {
+          usd: best.usd,
+          eth: ethUsdPrice > 0 ? best.usd / ethUsdPrice : 0,
+          nativePrice: nativeUsdPrice && nativeUsdPrice > 0 ? best.usd / nativeUsdPrice : 0,
+          nativeSymbol,
+          fetchedAt: Date.now(),
+        };
+        priceCache.set(cacheKey, quote);
+        recentPriceMisses.delete(cacheKey);
+        return quote;
+      }
+    } catch {
+      // An unknown or unquoted token remains unpriced rather than using a hardcoded value.
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
 
-    const quote: TokenPriceQuote = {
-      usd: baseline.usd,
-      eth: baseline.eth || (ethUsdPrice > 0 ? baseline.usd / ethUsdPrice : 0),
-      nativePrice: nativeSymbol === "SOL" && baseline.sol
-        ? baseline.sol
-        : (effNativeUsd > 0 ? baseline.usd / effNativeUsd : 0),
-      nativeSymbol,
-      fetchedAt: now,
-    };
-    priceCache.set(normAddr, quote);
-    return quote;
-  }
-
-  return null;
+    // Explicit consumer cancellation is not a market-data miss; don't suppress a
+    // fresh session's retry after all previous callers have unmounted.
+    if (!controller.signal.aborted || timedOut) recentPriceMisses.set(cacheKey, Date.now());
+    return null;
+  })();
+  pendingRequest.promise = pendingRequest.promise.finally(() => {
+    window.clearTimeout(timeoutId);
+    if (pendingPriceFetches.get(cacheKey) === pendingRequest) pendingPriceFetches.delete(cacheKey);
+  });
+  pendingPriceFetches.set(cacheKey, pendingRequest);
+  return subscribeToPriceFetch(pendingRequest, requestContext.signal);
 }
 
 /**
- * Synchronously get initial price (from cache or baseline).
+ * Synchronously get an initial quote only when a live quote for this exact
+ * chain/contract is already cached. Unknown or uncached assets remain unpriced.
  */
 export function getInitialTokenPrice(
-  symbol?: string,
+  _symbol?: string,
   contractAddress?: string,
-  ethUsdPrice = 2680,
+  _ethUsdPrice = 0,
   chainOrNativeSymbol?: string,
-  nativeUsdPrice?: number
+  _nativeUsdPrice?: number
 ): TokenPriceQuote {
   const normAddr = (contractAddress || "").trim().toLowerCase();
-  const normSym = (symbol || "").trim().toLowerCase().replace(/^\$/, "");
   const nativeSymbol = getChainNativeSymbol(chainOrNativeSymbol);
 
-  if (normAddr && priceCache.has(normAddr)) {
-    return priceCache.get(normAddr)!;
+  const cacheKey = normAddr ? priceCacheKey(normAddr, chainOrNativeSymbol) : "";
+  if (cacheKey && priceCache.has(cacheKey)) {
+    return priceCache.get(cacheKey)!;
   }
 
-  const baseline =
-    (normAddr && BASELINE_PRICES[normAddr]) ||
-    BASELINE_PRICES[normSym] ||
-    (normSym.includes("plur") ? BASELINE_PRICES["plur"] : null);
-
-  if (baseline) {
-    const effNativeUsd = (nativeUsdPrice && nativeUsdPrice > 0)
-      ? nativeUsdPrice
-      : getDefaultNativeUsdPrice(nativeSymbol);
-
-    return {
-      usd: baseline.usd,
-      eth: baseline.eth || (ethUsdPrice > 0 ? baseline.usd / ethUsdPrice : 0),
-      nativePrice: nativeSymbol === "SOL" && baseline.sol
-        ? baseline.sol
-        : (effNativeUsd > 0 ? baseline.usd / effNativeUsd : 0),
-      nativeSymbol,
-      fetchedAt: Date.now(),
-    };
-  }
 
   return { usd: 0, eth: 0, nativePrice: 0, nativeSymbol, fetchedAt: 0 };
 }
@@ -203,51 +386,69 @@ export interface TokenValuationResult {
  * Hook to resolve live USD and Chain-Native (SOL / BNB / BTC / ETH) valuation for any token holding.
  */
 export function useTokenValuation(
-  token: { symbol: string; balance: string; chain?: string; contractAddress?: string },
-  options?: { ethUsdPrice?: number; getUsd?: (symbol: string) => number } | number
+  token: {
+    symbol: string;
+    balance: string;
+    chain?: string;
+    contractAddress?: string;
+    rawBalance?: string;
+    decimals?: number | null;
+    amount?: number;
+  },
+  options?: {
+    ethUsdPrice?: number;
+    getUsd?: (symbol: string) => number;
+    livePriceEnabled?: boolean;
+    sessionToken?: string;
+    isAirGapped?: boolean;
+  } | number
 ): TokenValuationResult {
-  const ethUsdPrice = typeof options === "number" ? options : options?.ethUsdPrice ?? 2680;
+  const ethUsdPrice = typeof options === "number" ? options : options?.ethUsdPrice ?? 0;
   const getUsd = typeof options === "object" ? options?.getUsd : undefined;
+  const livePriceEnabled = typeof options === "object" ? options?.livePriceEnabled ?? false : false;
+  const sessionToken = typeof options === "object" ? options?.sessionToken ?? "" : "";
+  const isAirGapped = typeof options === "object" ? options?.isAirGapped ?? true : true;
 
   const nativeSymbol = getChainNativeSymbol(token.chain);
-  const nativeUsdPrice =
-    (getUsd ? getUsd(nativeSymbol) : 0) ||
-    (nativeSymbol === "ETH" ? ethUsdPrice : getDefaultNativeUsdPrice(nativeSymbol));
+  const nativeUsdPrice = getUsd ? getUsd(nativeSymbol) : 0;
 
   const [quote, setQuote] = useState<TokenPriceQuote>(() =>
     getInitialTokenPrice(token.symbol, token.contractAddress, ethUsdPrice, token.chain, nativeUsdPrice)
   );
 
-  const mountedRef = useRef(true);
   useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
     const addr = token.contractAddress?.trim().toLowerCase();
-    if (!addr) {
-      setQuote(getInitialTokenPrice(token.symbol, undefined, ethUsdPrice, token.chain, nativeUsdPrice));
-      return;
+    setQuote(getInitialTokenPrice(token.symbol, addr, ethUsdPrice, token.chain, nativeUsdPrice));
+    if (!addr || !livePriceEnabled || !sessionToken.trim() || isAirGapped) {
+      return () => {
+        cancelled = true;
+        controller.abort();
+      };
     }
 
-    fetchLiveTokenPrice(addr, ethUsdPrice, token.chain, nativeUsdPrice).then((live) => {
-      if (live && mountedRef.current) {
-        setQuote(live);
-      }
+    fetchLiveTokenPrice(addr, ethUsdPrice, token.chain, nativeUsdPrice, {
+      sessionToken,
+      isAirGapped,
+      signal: controller.signal,
+    }).then((live) => {
+      if (live && !cancelled && !controller.signal.aborted) setQuote(live);
     });
-  }, [token.contractAddress, token.symbol, token.chain, ethUsdPrice, nativeUsdPrice]);
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [token.contractAddress, token.symbol, token.chain, ethUsdPrice, nativeUsdPrice, livePriceEnabled, sessionToken, isAirGapped]);
 
   return useMemo(() => {
-    const num = balanceAmount(token.balance);
+    const num = tokenBalanceAmount(token);
     const totalUsd = num * quote.usd;
     const totalEth = ethUsdPrice > 0 ? totalUsd / ethUsdPrice : 0;
     const totalNative = nativeUsdPrice > 0 ? totalUsd / nativeUsdPrice : 0;
 
-    let usdFormatted = "0.00";
-    if (totalUsd > 0) {
+    let usdFormatted = quote.usd > 0 ? "0.00" : "N/A";
+    if (quote.usd > 0 && totalUsd > 0) {
       if (totalUsd < 0.01) {
         usdFormatted = "< 0.01";
       } else {
@@ -258,8 +459,8 @@ export function useTokenValuation(
       }
     }
 
-    let nativeFormatted = "0.0000";
-    if (totalNative > 0) {
+    let nativeFormatted = quote.usd > 0 && nativeUsdPrice > 0 ? "0.0000" : "N/A";
+    if (quote.usd > 0 && nativeUsdPrice > 0 && totalNative > 0) {
       if (totalNative < 0.0001) {
         nativeFormatted = "< 0.0001";
       } else if (totalNative >= 1000) {
@@ -271,8 +472,8 @@ export function useTokenValuation(
       }
     }
 
-    let ethFormatted = "0.0000";
-    if (totalEth > 0) {
+    let ethFormatted = ethUsdPrice > 0 ? "0.0000" : "N/A";
+    if (ethUsdPrice > 0 && totalEth > 0) {
       if (totalEth < 0.0001) {
         ethFormatted = "< 0.0001";
       } else {
@@ -292,7 +493,7 @@ export function useTokenValuation(
       totalEth,
       priceEth: quote.eth,
     };
-  }, [token.balance, quote, nativeSymbol, nativeUsdPrice, ethUsdPrice]);
+  }, [token.balance, token.amount, token.rawBalance, token.decimals, quote, nativeSymbol, nativeUsdPrice, ethUsdPrice]);
 }
 
 /**
@@ -300,16 +501,33 @@ export function useTokenValuation(
  */
 export function TokenValuationBadge({
   token,
-  ethUsdPrice = 2680,
+  ethUsdPrice = 0,
   getUsd,
+  livePriceEnabled = false,
+  sessionToken = "",
+  isAirGapped = true,
 }: {
-  token: { symbol: string; balance: string; chain?: string; contractAddress?: string };
+  token: {
+    symbol: string;
+    balance: string;
+    chain?: string;
+    contractAddress?: string;
+    rawBalance?: string;
+    decimals?: number | null;
+    amount?: number;
+  };
   ethUsdPrice?: number;
   getUsd?: (symbol: string) => number;
+  livePriceEnabled?: boolean;
+  sessionToken?: string;
+  isAirGapped?: boolean;
 }) {
   const { usdFormatted, nativeFormatted, nativeSymbol, totalUsd } = useTokenValuation(token, {
     ethUsdPrice,
     getUsd,
+    livePriceEnabled,
+    sessionToken,
+    isAirGapped,
   });
 
   const nativeColor =

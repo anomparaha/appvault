@@ -12,18 +12,18 @@ export const RayonMetricsBar: React.FC<RayonMetricsBarProps> = ({
 }) => {
   return (
     <>
-      {/* Zero-Knowledge Mnemonic Repair Banner */}
+      {/* Local mnemonic search information */}
       <div className="zero-knowledge-banner">
         <div className="zk-left">
           <span className="zk-shield-icon">🛡️</span>
           <div className="zk-text-wrap">
-            <span className="zk-headline">Local Only RAM Processing</span>
+            <span className="zk-headline">Local Search Processing</span>
             <span className="zk-subtext">
-              Rust Rayon executes permutation search directly in volatile RAM across multi-core CPUs. Zero disk persistence, zero cloud telemetry.
+              Rust Rayon runs permutation search in the app process. Optional balance checks contact public RPC providers when Online Mode is enabled; process memory is not an OS-level isolation guarantee.
             </span>
           </div>
         </div>
-        <span className="zk-lock-badge">RAM ONLY</span>
+        <span className="zk-lock-badge">LOCAL SEARCH</span>
       </div>
 
       {/* Smart Transposition Alert Banner */}

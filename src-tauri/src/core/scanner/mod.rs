@@ -6,8 +6,52 @@ pub mod solana;
 use futures::future::join_all;
 use rusqlite::{params, Connection};
 use serde::Serialize;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::Semaphore;
+
+pub type NetworkAccessGate = Arc<dyn Fn() -> Result<(), String> + Send + Sync>;
+
+pub async fn send_request_with_gate<F>(
+    request: F,
+    network_gate: &NetworkAccessGate,
+) -> Result<reqwest::Response, String>
+where
+    F: std::future::Future<Output = Result<reqwest::Response, reqwest::Error>>,
+{
+    crate::adapters::network::await_with_gate(
+        async move {
+            request
+                .await
+                .map_err(crate::adapters::network::redact_reqwest_error)
+        },
+        network_gate.as_ref(),
+    )
+    .await
+}
+
+pub async fn read_response_limited_with_gate(
+    response: &mut reqwest::Response,
+    max_bytes: usize,
+    network_gate: &NetworkAccessGate,
+) -> Result<Vec<u8>, String> {
+    crate::adapters::network::read_response_limited(
+        response,
+        max_bytes,
+        network_gate.as_ref(),
+    )
+    .await
+}
+
+pub async fn read_json_response_limited_with_gate(
+    response: &mut reqwest::Response,
+    max_bytes: usize,
+    network_gate: &NetworkAccessGate,
+) -> Result<serde_json::Value, String> {
+    let bytes = read_response_limited_with_gate(response, max_bytes, network_gate).await?;
+    serde_json::from_slice(&bytes).map_err(|error| format!("Invalid JSON-RPC response: {error}"))
+}
+
+static SCAN_SERIALIZER: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 use crate::adapters::evm::tokens::*;
 use crate::core::vault::repository::get_db_path;
@@ -21,6 +65,17 @@ pub struct DiscoveredToken {
     pub balance: String,
     pub raw_balance: String,
     pub contract_address: String,
+    pub decimals: u8,
+    pub logo_url: Option<String>,
+    pub token_program_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExistingEvmToken {
+    pub symbol: String,
+    pub name: String,
+    pub contract_address: String,
+    pub decimals: Option<u8>,
 }
 
 #[derive(Debug, Clone)]
@@ -65,9 +120,9 @@ pub const CHAINS: &[ChainConfig] = &[
     ChainConfig {
         key: "eth",
         rpcs: &[
-            "https://ethereum.publicnode.com",
-            "https://eth.drpc.org",
             "https://cloudflare-eth.com",
+            "https://eth.drpc.org",
+            "https://ethereum.publicnode.com",
         ],
         symbol: "ETH",
         kind: ChainKind::Evm,
@@ -76,7 +131,6 @@ pub const CHAINS: &[ChainConfig] = &[
     ChainConfig {
         key: "robinhood",
         rpcs: &[
-            "https://api.zan.top/node/v1/robinhood/mainnet/9f2590af4fda43418ca4f0e8ded27af5",
             "https://rpc.mainnet.chain.robinhood.com",
         ],
         symbol: "ETH",
@@ -121,7 +175,6 @@ pub const CHAINS: &[ChainConfig] = &[
     ChainConfig {
         key: "sol",
         rpcs: &[
-            "https://mainnet.helius-rpc.com/?api-key=f0adee34-1df4-45c6-b897-b93f4cad01c9",
             "https://api.mainnet-beta.solana.com",
             "https://solana-rpc.publicnode.com",
         ],
@@ -135,7 +188,14 @@ pub async fn execute_scan_balances(
     app: tauri::AppHandle,
     wallet_id: Option<i64>,
     wallet_ids: Option<Vec<i64>>,
+    chain_key: Option<String>,
+    network_gate: NetworkAccessGate,
 ) -> Result<ScanSummary, String> {
+    let _scan_guard = SCAN_SERIALIZER
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await;
+    network_gate.as_ref()()?;
     let path = get_db_path(&app)?;
     if !path.exists() {
         return Err(format!("database not found: {}", path.display()));
@@ -188,6 +248,53 @@ pub async fn execute_scan_balances(
         rows.filter_map(|r| r.ok()).collect()
     };
 
+    let existing_token_rows = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT wallet_id, chain, token_symbol, token_name, contract_address, decimals, logo_url
+                 FROM token_balances WHERE contract_address IS NOT NULL",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        rows.filter_map(|row| row.ok()).collect::<Vec<_>>()
+    };
+    let mut existing_evm_tokens: std::collections::HashMap<(i64, String), Vec<ExistingEvmToken>> =
+        std::collections::HashMap::new();
+    let mut existing_token_logos = std::collections::HashMap::<(i64, String, String), String>::new();
+    for (token_wallet_id, token_chain, symbol, name, contract_address, decimals, logo_url) in existing_token_rows {
+        let chain_key = token_chain.to_lowercase();
+        if let Some(logo_url) = logo_url.filter(|url| !url.trim().is_empty()) {
+            existing_token_logos.insert(
+                (token_wallet_id, chain_key.clone(), contract_address.to_lowercase()),
+                logo_url,
+            );
+        }
+        if !matches!(chain_key.as_str(), "eth" | "robinhood" | "base" | "arb" | "bsc") {
+            continue;
+        }
+        existing_evm_tokens
+            .entry((token_wallet_id, chain_key))
+            .or_default()
+            .push(ExistingEvmToken {
+                symbol,
+                name: name.unwrap_or_default(),
+                contract_address,
+                decimals: decimals.and_then(|value| u8::try_from(value).ok()),
+            });
+    }
+
     drop(conn);
 
     if wallets.is_empty() {
@@ -204,6 +311,9 @@ pub async fn execute_scan_balances(
 
     for (w_id, evm_addr, sol_addr, btc_addr) in wallets {
         for chain in CHAINS {
+            if chain_key.as_deref().is_some_and(|requested| requested != chain.key) {
+                continue;
+            }
             let has_addr = match chain.kind {
                 ChainKind::Solana => sol_addr.is_some(),
                 ChainKind::Bitcoin => btc_addr.is_some(),
@@ -218,30 +328,42 @@ pub async fn execute_scan_balances(
             let c_evm = evm_addr.clone();
             let c_sol = sol_addr.clone();
             let c_btc = btc_addr.clone();
+            let c_existing_tokens = existing_evm_tokens
+                .get(&(w_id, chain.key.to_lowercase()))
+                .cloned()
+                .unwrap_or_default();
+            let c_network_gate = network_gate.clone();
 
             tasks.push(async move {
                 let _permit = permit.acquire().await.ok();
+                c_network_gate.as_ref()()?;
                 if chain.kind == ChainKind::Solana {
                     if let Some(ref addr) = c_sol {
-                        solana::scan_solana_for_wallet(&c_client, addr, chain.rpcs, w_id).await
+                        solana::scan_solana_for_wallet_with_gate(
+                            &c_client, addr, chain.rpcs, w_id, &c_network_gate,
+                        ).await
                     } else {
                         Err("No solana address".to_string())
                     }
                 } else if chain.kind == ChainKind::Bitcoin {
                     if let Some(ref addr) = c_btc {
-                        bitcoin::scan_bitcoin_for_wallet(&c_client, addr, chain.rpcs, w_id).await
+                        bitcoin::scan_bitcoin_for_wallet_with_gate(
+                            &c_client, addr, chain.rpcs, w_id, &c_network_gate,
+                        ).await
                     } else {
                         Err("No bitcoin address".to_string())
                     }
                 } else if let Some(ref addr) = c_evm {
-                    evm::scan_evm_for_wallet(
+                    evm::scan_evm_for_wallet_with_gate(
                         &c_client,
                         addr,
                         chain.key,
                         chain.symbol,
                         chain.rpcs,
                         chain.tokens,
+                        c_existing_tokens,
                         w_id,
+                        &c_network_gate,
                     )
                     .await
                 } else {
@@ -252,6 +374,9 @@ pub async fn execute_scan_balances(
     }
 
     let results = join_all(tasks).await;
+    // Safe Mode or session lock may have changed while RPCs were in flight. Do not
+    // persist a scan snapshot unless the same gate is still open at write time.
+    network_gate.as_ref()()?;
 
     let mut write_conn = Connection::open(&path).map_err(|e| e.to_string())?;
     let _ = write_conn.busy_timeout(std::time::Duration::from_millis(5000));
@@ -277,12 +402,15 @@ pub async fn execute_scan_balances(
 
         let mut insert_tok_stmt = tx
             .prepare(
-                "INSERT INTO token_balances (wallet_id, chain, token_symbol, token_name, balance, raw_balance, contract_address, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))
+                "INSERT INTO token_balances (wallet_id, chain, token_symbol, token_name, balance, raw_balance, contract_address, decimals, logo_url, token_program_id, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, datetime('now'))
                  ON CONFLICT(wallet_id, chain, token_symbol, contract_address) DO UPDATE SET
                      balance = excluded.balance,
                      raw_balance = excluded.raw_balance,
                      token_name = excluded.token_name,
+                     decimals = excluded.decimals,
+                     logo_url = COALESCE(excluded.logo_url, token_balances.logo_url),
+                     token_program_id = excluded.token_program_id,
                      updated_at = excluded.updated_at;",
             )
             .map_err(|e| e.to_string())?;
@@ -298,24 +426,44 @@ pub async fn execute_scan_balances(
                     if w_res.has_funds {
                         funded_count += 1;
                     }
-                    let _ = update_stmt.execute(params![
-                        w_res.wallet_id,
-                        w_res.chain_key,
-                        w_res.native_balance
-                    ]);
+                    update_stmt
+                        .execute(params![
+                            w_res.wallet_id,
+                            w_res.chain_key,
+                            w_res.native_balance
+                        ])
+                        .map_err(|e| format!("Failed to persist balance for wallet {} on {}: {e}", w_res.wallet_id, w_res.chain_key))?;
 
-                    let _ = del_old_tok_stmt.execute(params![w_res.wallet_id, w_res.chain_key]);
+                    let mut tokens = w_res.tokens;
+                    for token in &mut tokens {
+                        if token.logo_url.is_none() {
+                            let logo_key = (
+                                token.wallet_id,
+                                token.chain.to_lowercase(),
+                                token.contract_address.to_lowercase(),
+                            );
+                            token.logo_url = existing_token_logos.get(&logo_key).cloned();
+                        }
+                    }
+                    del_old_tok_stmt
+                        .execute(params![w_res.wallet_id, w_res.chain_key])
+                        .map_err(|e| format!("Failed to replace token balances for wallet {} on {}: {e}", w_res.wallet_id, w_res.chain_key))?;
 
-                    for tok in w_res.tokens {
-                        let _ = insert_tok_stmt.execute(params![
-                            tok.wallet_id,
-                            tok.chain,
-                            tok.symbol,
-                            tok.name,
-                            tok.balance,
-                            tok.raw_balance,
-                            tok.contract_address,
-                        ]);
+                    for tok in tokens {
+                        insert_tok_stmt
+                            .execute(params![
+                                tok.wallet_id,
+                                tok.chain,
+                                tok.symbol,
+                                tok.name,
+                                tok.balance,
+                                tok.raw_balance,
+                                tok.contract_address,
+                                i64::from(tok.decimals),
+                                tok.logo_url,
+                                tok.token_program_id,
+                            ])
+                            .map_err(|e| format!("Failed to persist token {} for wallet {}: {e}", tok.contract_address, tok.wallet_id))?;
                     }
                 }
                 Err(_) => {
@@ -325,6 +473,9 @@ pub async fn execute_scan_balances(
         }
     }
 
+    // Re-check at the transaction boundary so an interrupted scan cannot publish
+    // stale balances after Safe Mode or the vault session has been revoked.
+    network_gate.as_ref()()?;
     tx.commit().map_err(|e| e.to_string())?;
 
     Ok(ScanSummary {

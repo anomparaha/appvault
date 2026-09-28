@@ -23,7 +23,7 @@ pub struct RecoverySessionStatusResponse {
     pub recent_solutions: Vec<String>,
 }
 
-// Global active session tracker in RAM (100% Zero-Disk)
+// Global active session tracker in process memory; active data is not intentionally persisted.
 static ACTIVE_SESSION_ID: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 static ACTIVE_RAW_PHRASE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 static ACTIVE_TARGET_ADDR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);

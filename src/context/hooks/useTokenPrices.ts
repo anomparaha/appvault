@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { TRUSTED_TOKEN_SYMBOLS_BY_CHAIN } from "../../services/tokenPriceService";
 
 export interface PriceQuote {
   usd?: number;
@@ -66,7 +67,7 @@ const FALLBACK_RATES: Record<string, number> = {
 
 const STORAGE_KEY = "plurivex_selected_currency";
 
-export function useTokenPrices() {
+export function useTokenPrices(sessionToken = "", enabled = false) {
   const [priceReport, setPriceReport] = useState<PriceReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [currency, setCurrencyState] = useState<string>(() => {
@@ -82,22 +83,31 @@ export function useTokenPrices() {
   });
 
   const refreshPrices = useCallback(async () => {
+    if (!enabled || !sessionToken) return;
     try {
       setLoading(true);
-      const report = await invoke<PriceReport>("get_token_prices", {});
+      const report = await invoke<PriceReport>("get_token_prices", { sessionToken });
       setPriceReport(report);
     } catch (err) {
       console.warn("Failed to fetch token prices:", err);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [enabled, sessionToken]);
 
   useEffect(() => {
-    refreshPrices();
-    const interval = setInterval(refreshPrices, 60000);
+    if (!enabled || !sessionToken) {
+      setLoading(false);
+      return;
+    }
+    void refreshPrices();
+    const interval = setInterval(refreshPrices, 60_000);
     return () => clearInterval(interval);
-  }, [refreshPrices]);
+  }, [enabled, sessionToken, refreshPrices]);
+
+  const markStale = useCallback(() => {
+    setPriceReport((previous) => previous ? { ...previous, stale: true } : previous);
+  }, []);
 
   const setCurrency = useCallback((newCurr: string) => {
     const code = newCurr.toUpperCase();
@@ -174,138 +184,42 @@ export function useTokenPrices() {
   const getUsd = useCallback(
     (key: string): number => {
       const k = key.toLowerCase();
-      // Stablecoins pinned to ~1.00 USD
-      if (
-        k === "usdt" ||
-        k === "usdc" ||
-        k === "usdbc" ||
-        k === "dai" ||
-        k === "busd" ||
-        k === "fdusd" ||
-        k === "pyusd"
-      ) {
-        return 1.0;
-      }
-
       const id = normalizeKey(key);
       const quoteUsd = priceReport?.prices?.[id]?.usd;
       if (typeof quoteUsd === "number" && quoteUsd > 0) {
         return quoteUsd;
       }
 
-      // Safe baseline fallbacks if offline or initial load
-      switch (id) {
-        case "bitcoin":
-          return 65000;
-        case "ethereum":
-          return 2600;
-        case "binancecoin":
-          return 580;
-        case "solana":
-          return 140;
-        case "arbitrum":
-          return 0.50;
-        case "chainlink":
-          return 12.0;
-        case "uniswap":
-          return 6.0;
-        case "pancakeswap-token":
-          return 1.80;
-        case "aerodrome-finance":
-          return 0.60;
-        case "gmx":
-          return 25.0;
-        case "shiba-inu":
-          return 0.000015;
-        case "pepe":
-          return 0.00001;
-        default:
-          if (k === "base") return priceReport?.prices?.["ethereum"]?.usd ?? 2600;
-          return 0;
-      }
+      if (k === "base") return priceReport?.prices?.["ethereum"]?.usd ?? 0;
+      return 0;
     },
     [priceReport]
   );
 
   const getTokenUsd = useCallback(
-    (symbol: string, chain?: string, contractAddress?: string): number => {
-      const sym = symbol.toUpperCase();
-      const ch = (chain || "").toLowerCase();
-      const addr = (contractAddress || "").toLowerCase();
+    (_symbol: string, chain?: string, contractAddress?: string): number => {
+      const chainKey = (chain || "").toLowerCase();
+      const normalizedChain = chainKey === "ethereum" ? "eth"
+        : chainKey === "arbitrum" ? "arb"
+        : chainKey === "solana" ? "sol"
+        : chainKey === "rh" ? "robinhood"
+        : chainKey;
+      const address = (contractAddress || "").toLowerCase();
+      const trustedSymbol = address
+        ? TRUSTED_TOKEN_SYMBOLS_BY_CHAIN[normalizedChain]?.[address]
+        : undefined;
+      const verifiedSymbol = trustedSymbol?.toUpperCase();
 
-      // Stablecoins pinned to ~1.00 USD
-      if (
-        sym === "USDT" ||
-        sym === "USDC" ||
-        sym === "USDBC" ||
-        sym === "DAI" ||
-        sym === "BUSD" ||
-        sym === "FDUSD" ||
-        sym === "PYUSD"
-      ) {
-        return 1.0;
-      }
-
-      // Solana SPL / Token-2022 tokens:
-      // Never treat a Solana token named "BTc" as Bitcoin ($84,000)!
-      if (ch === "sol" || ch === "solana") {
-        if (
-          addr === "bobbytpe2kpajwh5tppky72knd2cwmtdya63bqo2yiks" ||
-          sym === "BTC" ||
-          sym === "BOBBY"
-        ) {
-          // Bobby The Cat (BTc) meme coin live market price (~$0.00000069 USD)
-          return 0.00000069;
-        }
-        if (sym === "BONK") return 0.000018;
-        if (sym === "JUP") return 0.85;
-        if (sym === "RAY") return 1.80;
-        if (sym === "WIF") return 1.50;
-        if (sym === "MSOL" || sym === "BSOL" || sym === "JITOSOL") {
-          return priceReport?.prices?.["solana"]?.usd ? priceReport.prices["solana"].usd * 1.15 : 160;
-        }
-        // Unknown Solana token/meme coin: return 0, NEVER assume it's Bitcoin!
-        return 0;
-      }
-
-      // For EVM tokens with symbol BTC:
-      // Only treat as Bitcoin if it's explicitly WBTC or BTCB
-      if (sym === "BTC") {
-        if (ch === "btc" || ch === "bitcoin") {
-          return priceReport?.prices?.["bitcoin"]?.usd ?? 65000;
-        }
-        if (ch === "eth" || ch === "arbitrum" || ch === "optimism" || ch === "polygon" || ch === "base") {
-          return priceReport?.prices?.["bitcoin"]?.usd ?? 65000;
-        }
-        if (ch === "bsc") {
-          return priceReport?.prices?.["bitcoin"]?.usd ?? 65000;
-        }
-        return 0;
-      }
-
-      // Plurivex Ecosystem Token
-      if (sym === "$PLUR" || sym === "PLUR" || sym === "PLX" || addr === "0xf890d3fe2be22c6259bbe9f607692c7168556c93") {
-        return 0.10;
-      }
-
-      // Robinhood Chain Tokens
-      if (sym === "JEV" || addr === "0x4d066ab4d924b7b3d01c6ecbfc142efe33aeb7fa") {
-        return 0.0003003;
-      }
-      if (sym === "SMA" || addr === "0x3bd9136d51af679bd1b11d06b951155543c5449f") {
-        return 0.00000456;
-      }
-      if (sym === "ASTEROID" || sym === "IB-ASTEROID" || addr === "0x38aaf33082b20aff2e33433138de920f131b7777" || addr === "0x6e96e5d84513996ef7df308af345f9283c4da284") {
-        return 0.00001918;
-      }
-      if (sym === "USDG" || addr === "0x5fc5360d0400a0fd4f2af552add042d716f1d168") {
-        return 0.2641;
-      }
-      if (sym === "WETH" && (ch === "robinhood" || ch === "base" || ch === "arbitrum" || ch === "eth")) {
-        return priceReport?.prices?.["ethereum"]?.usd ?? 2680;
-      }
-
-      return getUsd(symbol);
+      // A token ticker is user-controlled metadata. Resolve an asset identifier
+      // only after the chain + contract/mint pair is verified, then use only a
+      // price report quote. No hardcoded token price or symbol-only peg is a
+      // market quote; unpriced assets are left for the live DEX quote path.
+      if (!verifiedSymbol) return 0;
+      const assetId = normalizeKey(verifiedSymbol.replace(/^\$/, ""));
+      const reportedUsd = priceReport?.prices?.[assetId]?.usd;
+      return typeof reportedUsd === "number" && Number.isFinite(reportedUsd) && reportedUsd > 0
+        ? reportedUsd
+        : 0;
     },
     [getUsd, priceReport]
   );
@@ -411,6 +325,7 @@ export function useTokenPrices() {
     priceReport,
     loading,
     refreshPrices,
+    markStale,
     currency,
     setCurrency,
     toggleCurrency,

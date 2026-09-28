@@ -31,7 +31,7 @@ export interface UseAppUpdaterReturn {
   restartApp: () => Promise<void>;
 }
 
-export function useAppUpdater(isAirGapped: boolean): UseAppUpdaterReturn {
+export function useAppUpdater(isAirGapped: boolean, sessionToken: string): UseAppUpdaterReturn {
   const [updateAvailable, setUpdateAvailable] = useState<boolean>(false);
   const [checking, setChecking] = useState<boolean>(false);
   const [downloading, setDownloading] = useState<boolean>(false);
@@ -48,12 +48,20 @@ export function useAppUpdater(isAirGapped: boolean): UseAppUpdaterReturn {
    */
   const checkForUpdates = useCallback(
     async (silent: boolean = true): Promise<boolean> => {
+      if (!sessionToken) {
+        if (!silent) setError("An unlocked vault session is required to check for updates.");
+        setUpdateAvailable(false);
+        setNewVersion(null);
+        setReleaseNotes(null);
+        return false;
+      }
+
       // 1. Guardrail Air-Gapped Safe Mode
       try {
         const airGappedActive = await invoke<boolean>("get_air_gapped_mode");
         if (airGappedActive || isAirGapped) {
           if (!silent) {
-            setError("Air-Gapped Safe Mode is active. Internet access is blocked for security.");
+            setError("Safe Mode is active. This app's updater requests are disabled.");
           }
           setUpdateAvailable(false);
           setNewVersion(null);
@@ -71,7 +79,7 @@ export function useAppUpdater(isAirGapped: boolean): UseAppUpdaterReturn {
       setError(null);
 
       try {
-        const update = await invoke<UpdateInfo | null>("vault_updater_check");
+        const update = await invoke<UpdateInfo | null>("vault_updater_check", { sessionToken });
         if (update && update.version) {
           setUpdateAvailable(true);
           setNewVersion(update.version);
@@ -100,14 +108,22 @@ export function useAppUpdater(isAirGapped: boolean): UseAppUpdaterReturn {
         setChecking(false);
       }
     },
-    [isAirGapped]
+    [isAirGapped, sessionToken]
   );
 
   /**
-   * Download new release binary in chunks and verify Minisign signature via Rust kernel.
+   * Download new release binary in chunks and verify the Minisign signature in the Rust backend.
    * Fail-closed: resets state completely on network error or invalid signature.
    */
   const downloadAndInstall = useCallback(async () => {
+    if (!sessionToken) {
+      setError("An unlocked vault session is required to install updates.");
+      return;
+    }
+    if (isAirGapped) {
+      setError("Air-Gapped Safe Mode is active. Update downloads are blocked.");
+      return;
+    }
     if (!newVersion) {
       setError("No update package is ready to download.");
       return;
@@ -140,7 +156,7 @@ export function useAppUpdater(isAirGapped: boolean): UseAppUpdaterReturn {
         setReadyToRestart(true);
       });
 
-      await invoke("vault_updater_download_and_install");
+      await invoke("vault_updater_download_and_install", { sessionToken });
       setDownloadProgress(100);
       setReadyToRestart(true);
       try {
@@ -163,7 +179,7 @@ export function useAppUpdater(isAirGapped: boolean): UseAppUpdaterReturn {
         unlistenFinished();
       }
     }
-  }, [newVersion]);
+  }, [newVersion, sessionToken, isAirGapped]);
 
   /**
    * Restart application immediately to apply new version.
@@ -179,7 +195,7 @@ export function useAppUpdater(isAirGapped: boolean): UseAppUpdaterReturn {
 
   // Automatic check when app loads (800ms delay), window focus, and periodic polling (every 5 mins)
   useEffect(() => {
-    if (isAirGapped) return;
+    if (isAirGapped || !sessionToken) return;
 
     // 1. Fast initial check after mount or switching to online mode
     const initialTimer = setTimeout(() => {
@@ -202,7 +218,7 @@ export function useAppUpdater(isAirGapped: boolean): UseAppUpdaterReturn {
       clearInterval(intervalTimer);
       window.removeEventListener("focus", handleFocus);
     };
-  }, [isAirGapped, checkForUpdates]);
+  }, [isAirGapped, sessionToken, checkForUpdates]);
 
   return {
     updateAvailable,

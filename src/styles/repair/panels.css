@@ -515,7 +515,7 @@
   border-radius: 2px;
 }
 
-/* Air-Gapped Safe Mode & Zero-Knowledge UI */
+/* Safe Mode status UI */
 .btn-airgap-toggle {
   display: flex;
   align-items: center;
@@ -581,7 +581,7 @@
   }
 }
 
-/* Zero-Knowledge Mnemonic Repair Banner */
+/* Local mnemonic search information banner */
 .zero-knowledge-banner {
   display: flex;
   align-items: center;

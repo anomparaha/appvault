@@ -16,6 +16,46 @@ pub struct SolanaAccountDetails {
     pub space: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SolanaTransactionSignature {
+    pub signature: String,
+    pub slot: u64,
+    pub block_time: Option<i64>,
+    pub confirmation_status: Option<String>,
+    pub failed: bool,
+}
+
+fn parse_solana_signature_entries(
+    entries: &serde_json::Value,
+) -> Result<Vec<SolanaTransactionSignature>, String> {
+    let entries = entries
+        .as_array()
+        .ok_or_else(|| "Invalid getSignaturesForAddress result".to_string())?;
+    Ok(entries
+        .iter()
+        .filter_map(|entry| {
+            let signature = entry.get("signature")?.as_str()?.trim();
+            if signature.is_empty()
+                || signature.len() > 100
+                || bs58::decode(signature).into_vec().ok()?.len() != 64
+            {
+                return None;
+            }
+            Some(SolanaTransactionSignature {
+                signature: signature.to_string(),
+                slot: entry.get("slot").and_then(|slot| slot.as_u64()).unwrap_or_default(),
+                block_time: entry.get("blockTime").and_then(|time| time.as_i64()),
+                confirmation_status: entry
+                    .get("confirmationStatus")
+                    .and_then(|status| status.as_str())
+                    .map(str::to_string),
+                failed: entry.get("err").map(|error| !error.is_null()).unwrap_or(false),
+            })
+        })
+        .collect())
+}
+
 fn shared_client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(9))
@@ -39,9 +79,20 @@ pub fn format_sol_display(lamports: u64) -> (f64, String) {
     (amount, s)
 }
 
+#[cfg(test)]
 pub async fn rpc_get_sol_balance(address: &str, rpc: &str) -> Result<String, String> {
+    let permissive_gate = || Ok(());
+    rpc_get_sol_balance_with_gate(address, rpc, &permissive_gate).await
+}
+
+pub async fn rpc_get_sol_balance_with_gate(
+    address: &str,
+    rpc: &str,
+    network_gate: &crate::adapters::network::NetworkAccessGate,
+) -> Result<String, String> {
+    network_gate()?;
     let client = shared_client();
-    let resp = client
+    let request = client
         .post(rpc)
         .header("Content-Type", "application/json")
         .json(&serde_json::json!({
@@ -49,12 +100,23 @@ pub async fn rpc_get_sol_balance(address: &str, rpc: &str) -> Result<String, Str
             "id": 1,
             "method": "getBalance",
             "params": [address, {"commitment": "confirmed"}]
-        }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let data: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+        }));
+    let mut response = crate::adapters::network::await_with_gate(
+        async move { request.send().await.map_err(crate::adapters::network::redact_reqwest_error) },
+        network_gate,
+    )
+    .await?;
+    if !response.status().is_success() {
+        return Err(format!("RPC returned HTTP {}", response.status()));
+    }
+    let body = crate::adapters::network::read_response_limited(
+        &mut response,
+        64_000,
+        network_gate,
+    )
+    .await?;
+    let data: serde_json::Value = serde_json::from_slice(&body).map_err(|error| error.to_string())?;
+    network_gate()?;
     let lamports = data
         .get("result")
         .and_then(|r| r.get("value"))
@@ -63,11 +125,22 @@ pub async fn rpc_get_sol_balance(address: &str, rpc: &str) -> Result<String, Str
     Ok(lamports.to_string())
 }
 
+#[cfg(test)]
 pub async fn get_solana_recent_blockhash(rpcs: &[&str]) -> Result<String, String> {
+    let permissive_gate = || Ok(());
+    get_solana_recent_blockhash_with_gate(rpcs, &permissive_gate).await
+}
+
+pub async fn get_solana_recent_blockhash_with_gate(
+    rpcs: &[&str],
+    network_gate: &crate::adapters::network::NetworkAccessGate,
+) -> Result<String, String> {
+    network_gate()?;
     let client = shared_client();
 
     for rpc in rpcs {
-        let resp = client
+        network_gate()?;
+        let request = client
             .post(*rpc)
             .header("Content-Type", "application/json")
             .header("User-Agent", "Plurivex/1.0")
@@ -76,33 +149,58 @@ pub async fn get_solana_recent_blockhash(rpcs: &[&str]) -> Result<String, String
                 "id": 1,
                 "method": "getLatestBlockhash",
                 "params": [{"commitment": "confirmed"}]
-            }))
-            .send()
-            .await;
+            }));
+        let response = crate::adapters::network::await_with_gate(
+            async move { request.send().await.map_err(crate::adapters::network::redact_reqwest_error) },
+            network_gate,
+        )
+        .await;
 
-        if let Ok(res) = resp {
-            if res.status().is_success() {
-                if let Ok(data) = res.json::<serde_json::Value>().await {
-                    if let Some(bh) = data
-                        .pointer("/result/value/blockhash")
-                        .and_then(|b| b.as_str())
-                    {
-                        return Ok(bh.to_string());
+        if let Ok(mut response) = response {
+            if response.status().is_success() {
+                let body = crate::adapters::network::read_response_limited(
+                    &mut response,
+                    64_000,
+                    network_gate,
+                )
+                .await;
+                if let Ok(body) = body {
+                    if let Ok(data) = serde_json::from_slice::<serde_json::Value>(&body) {
+                        if let Some(blockhash) = data
+                            .pointer("/result/value/blockhash")
+                            .and_then(|value| value.as_str())
+                        {
+                            network_gate()?;
+                            return Ok(blockhash.to_string());
+                        }
                     }
                 }
             }
         }
     }
 
+    network_gate()?;
     Err("Failed to fetch Solana recent blockhash from RPC nodes".to_string())
 }
 
+#[cfg(test)]
 pub async fn broadcast_solana_tx(rpcs: &[&str], raw_tx_base64: &str) -> Result<String, String> {
+    let permissive_gate = || Ok(());
+    broadcast_solana_tx_with_gate(rpcs, raw_tx_base64, &permissive_gate).await
+}
+
+pub async fn broadcast_solana_tx_with_gate(
+    rpcs: &[&str],
+    raw_tx_base64: &str,
+    network_gate: &crate::adapters::network::NetworkAccessGate,
+) -> Result<String, String> {
+    network_gate()?;
     let client = shared_client();
     let mut last_err = "All Solana RPC nodes failed to broadcast transaction".to_string();
 
     for rpc in rpcs {
-        let resp = client
+        network_gate()?;
+        let request = client
             .post(*rpc)
             .header("Content-Type", "application/json")
             .header("User-Agent", "Plurivex/1.0")
@@ -114,51 +212,76 @@ pub async fn broadcast_solana_tx(rpcs: &[&str], raw_tx_base64: &str) -> Result<S
                     raw_tx_base64,
                     {
                         "encoding": "base64",
-                        "skipPreflight": true,
+                        "skipPreflight": false,
                         "preflightCommitment": "confirmed",
                         "maxRetries": 3
                     }
                 ]
-            }))
-            .send()
-            .await;
+            }));
+        let response = crate::adapters::network::await_with_gate(
+            async move { request.send().await.map_err(crate::adapters::network::redact_reqwest_error) },
+            network_gate,
+        )
+        .await;
 
-        if let Ok(res) = resp {
-            if res.status().is_success() {
-                if let Ok(data) = res.json::<serde_json::Value>().await {
-                    if let Some(sig) = data.get("result").and_then(|r| r.as_str()) {
-                        return Ok(sig.to_string());
-                    }
-                    if let Some(err) = data.get("error") {
-                        let msg = err
-                            .get("message")
-                            .and_then(|m| m.as_str())
-                            .unwrap_or("Solana RPC Error");
-                        let details = err.get("data").map(|d| d.to_string()).unwrap_or_default();
-                        last_err = if details.is_empty() {
-                            msg.to_string()
-                        } else {
-                            format!("{}: {}", msg, details)
-                        };
-                        continue;
+        if let Ok(mut response) = response {
+            if response.status().is_success() {
+                let body = crate::adapters::network::read_response_limited(
+                    &mut response,
+                    64_000,
+                    network_gate,
+                )
+                .await;
+                if let Ok(body) = body {
+                    if let Ok(data) = serde_json::from_slice::<serde_json::Value>(&body) {
+                        if let Some(signature) = data.get("result").and_then(|result| result.as_str()) {
+                            network_gate()?;
+                            return Ok(signature.to_string());
+                        }
+                        if let Some(error) = data.get("error") {
+                            let msg = error
+                                .get("message")
+                                .and_then(|message| message.as_str())
+                                .unwrap_or("Solana RPC Error");
+                            let details = error.get("data").map(|value| value.to_string()).unwrap_or_default();
+                            last_err = if details.is_empty() {
+                                msg.to_string()
+                            } else {
+                                format!("{}: {}", msg, details)
+                            };
+                            continue;
+                        }
                     }
                 }
             }
         }
     }
 
+    network_gate()?;
     Err(last_err)
 }
 
+#[cfg(test)]
 pub async fn get_solana_account_details(
     rpcs: &[&str],
     address: &str,
 ) -> Result<SolanaAccountDetails, String> {
+    let permissive_gate = || Ok(());
+    get_solana_account_details_with_gate(rpcs, address, &permissive_gate).await
+}
+
+pub async fn get_solana_account_details_with_gate(
+    rpcs: &[&str],
+    address: &str,
+    network_gate: &(dyn Fn() -> Result<(), String> + Send + Sync),
+) -> Result<SolanaAccountDetails, String> {
+    network_gate()?;
     let client = shared_client();
     let mut last_err = "Failed to query Solana account details from RPC nodes".to_string();
 
     for rpc in rpcs {
-        let resp = client
+        network_gate()?;
+        let request = client
             .post(*rpc)
             .header("Content-Type", "application/json")
             .header("User-Agent", "Mozilla/5.0")
@@ -170,13 +293,23 @@ pub async fn get_solana_account_details(
                     address,
                     {"encoding": "jsonParsed", "commitment": "confirmed"}
                 ]
-            }))
-            .send()
-            .await;
+            }));
+        let response = crate::adapters::network::await_with_gate(
+            async move { request.send().await.map_err(crate::adapters::network::redact_reqwest_error) },
+            network_gate,
+        )
+        .await;
 
-        if let Ok(res) = resp {
+        if let Ok(mut res) = response {
             if res.status().is_success() {
-                if let Ok(data) = res.json::<serde_json::Value>().await {
+                let body = crate::adapters::network::read_response_limited(
+                    &mut res,
+                    1_000_000,
+                    network_gate,
+                )
+                .await;
+                if let Ok(body) = body {
+                    if let Ok(data) = serde_json::from_slice::<serde_json::Value>(&body) {
                     if let Some(err) = data.get("error") {
                         let msg = err
                             .get("message")
@@ -189,6 +322,7 @@ pub async fn get_solana_account_details(
                     if let Some(result_obj) = data.get("result") {
                         let val = result_obj.get("value");
                         if val.is_none() || val == Some(&serde_json::Value::Null) {
+                            network_gate()?;
                             return Ok(SolanaAccountDetails {
                                 exists: false,
                                 owner: "11111111111111111111111111111111".to_string(),
@@ -287,6 +421,7 @@ pub async fn get_solana_account_details(
                             let is_sys =
                                 account_type == "standard_eoa" || account_type == "unallocated";
 
+                            network_gate()?;
                             return Ok(SolanaAccountDetails {
                                 exists: true,
                                 owner,
@@ -308,4 +443,140 @@ pub async fn get_solana_account_details(
     }
 
     Err(last_err)
+}
+
+/// Returns the newest confirmed transaction signatures for an address, optionally continuing
+/// before a previously returned signature. The caller enforces vault-session and Safe Mode gates.
+pub async fn get_solana_transaction_history<F>(
+    rpcs: &[&str],
+    address: &str,
+    before: Option<&str>,
+    limit: usize,
+    verify_network_access: F,
+) -> Result<Vec<SolanaTransactionSignature>, String>
+where
+    F: Fn() -> Result<(), String> + Send + Sync,
+{
+    let client = shared_client();
+    let network_gate: &crate::adapters::network::NetworkAccessGate = &verify_network_access;
+    let limit = limit.clamp(1, 100);
+    let mut last_err = "Failed to fetch Solana transaction history from RPC nodes".to_string();
+
+    for rpc in rpcs {
+        network_gate()?;
+        let mut config = serde_json::json!({
+            "commitment": "confirmed",
+            "limit": limit
+        });
+        if let Some(before) = before {
+            config["before"] = serde_json::Value::String(before.to_string());
+        }
+        let payload = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "getSignaturesForAddress",
+            "params": [address, config]
+        });
+
+        let request = client
+            .post(*rpc)
+            .header("Content-Type", "application/json")
+            .header("User-Agent", "Plurivex/1.0")
+            .json(&payload);
+        let mut response = match crate::adapters::network::await_with_gate(
+            async move { request.send().await.map_err(crate::adapters::network::redact_reqwest_error) },
+            network_gate,
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                network_gate()?;
+                last_err = format!("Solana RPC request failed: {error}");
+                continue;
+            }
+        };
+        if !response.status().is_success() {
+            last_err = format!("RPC returned HTTP {}", response.status());
+            continue;
+        }
+        let body = match crate::adapters::network::read_response_limited(
+            &mut response,
+            1_000_000,
+            network_gate,
+        )
+        .await
+        {
+            Ok(body) => body,
+            Err(error) => {
+                network_gate()?;
+                last_err = format!("Unreadable or oversized Solana history response: {error}");
+                continue;
+            }
+        };
+        network_gate()?;
+        let data = match serde_json::from_slice::<serde_json::Value>(&body) {
+            Ok(data) => data,
+            Err(error) => {
+                last_err = "Solana RPC returned invalid JSON".to_string();
+                continue;
+            }
+        };
+        if let Some(error) = data.get("error") {
+            last_err = "Solana RPC rejected the history request".to_string();
+            continue;
+        }
+        let Some(entries) = data.get("result") else {
+            last_err = "Solana RPC returned an invalid getSignaturesForAddress response".to_string();
+            continue;
+        };
+        match parse_solana_signature_entries(entries) {
+            Ok(transactions) => {
+                verify_network_access()?;
+                return Ok(transactions);
+            }
+            Err(error) => last_err = format!("Invalid Solana signature response: {error}"),
+        }
+    }
+
+    Err(last_err)
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    #[test]
+    fn parses_signature_history_and_error_status() {
+        let response = serde_json::json!([
+            {
+                "signature": "5h6xBEauJ3PK6SWCZ1PGjBvj8vDdWG3KpwATGy1ARAXFSDwt8GFXM7W5Ncn16wmqokgpiKRLuS83KUxyZyv2sUYv",
+                "slot": 114,
+                "err": null,
+                "blockTime": 1_700_000_000,
+                "confirmationStatus": "finalized"
+            },
+            {
+                "signature": "5h6xBEauJ3PK6SWCZ1PGjBvj8vDdWG3KpwATGy1ARAXFSDwt8GFXM7W5Ncn16wmqokgpiKRLuS83KUxyZyv2sUYv",
+                "slot": 113,
+                "err": { "InstructionError": [0, "Custom"] },
+                "blockTime": null,
+                "confirmationStatus": "confirmed"
+            }
+        ]);
+
+        let history = parse_solana_signature_entries(&response).unwrap();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].slot, 114);
+        assert_eq!(history[0].block_time, Some(1_700_000_000));
+        assert!(!history[0].failed);
+        assert_eq!(history[0].confirmation_status.as_deref(), Some("finalized"));
+        assert!(history[1].failed);
+        assert_eq!(history[1].block_time, None);
+    }
+
+    #[test]
+    fn rejects_non_array_history_response() {
+        assert!(parse_solana_signature_entries(&serde_json::json!({ "error": "bad" })).is_err());
+    }
 }

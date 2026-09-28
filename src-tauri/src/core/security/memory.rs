@@ -1,7 +1,7 @@
 use std::sync::atomic::{compiler_fence, Ordering};
 pub use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-/// Secure buffer that is automatically zeroed out from RAM upon drop
+/// Buffer whose managed bytes are overwritten with `zeroize` when dropped. This is a best-effort process-memory measure, not a guarantee of physical RAM erasure or clearing every copy.
 pub struct SecureBuffer {
     data: Vec<u8>,
 }
@@ -38,14 +38,16 @@ impl SecureBuffer {
     }
 }
 
-/// Overwrite any mutable byte slice with zeroes and invoke compiler fence
-/// ensuring memory is cleared even with compiler optimizations enabled.
+/// Overwrite a mutable byte slice with zeroes and issue a compiler fence to
+/// discourage removal/reordering of the explicit clearing operation. This does
+/// not guarantee physical RAM erasure or clearing copies held elsewhere.
 pub fn secure_zero_slice(slice: &mut [u8]) {
     slice.zeroize();
     compiler_fence(Ordering::SeqCst);
 }
 
-/// Overwrite a mutable string buffer with zeroes in RAM and clear it
+/// Overwrite the current mutable string buffer with zeroes and clear its length.
+/// This is best-effort and does not clear copies held elsewhere.
 pub fn secure_zero_string(s: &mut String) {
     unsafe {
         s.as_bytes_mut().zeroize();

@@ -5,13 +5,21 @@ commands.allow = ["scan_balances", "scan_phrase_on_the_fly"]
 
 [[permission]]
 identifier = "allow-fee-estimate"
-description = "Allow fetching chain fee and nonce data"
+description = "Allow fetching chain fee, pinging RPC nodes, and reading nonce, mint metadata, and lookup-table data"
 commands.allow = [
   "get_chain_fee_data",
+  "ping_rpc_node",
   "get_account_nonce_and_balance",
   "get_solana_recent_blockhash",
-  "get_solana_account_details"
+  "get_solana_account_details",
+  "get_solana_mint_info",
+  "get_solana_address_lookup_table"
 ]
+
+[[permission]]
+identifier = "allow-chain-history"
+description = "Allow reading transaction history and confirmation status for EVM and Solana"
+commands.allow = ["get_solana_transaction_history", "confirm_solana_transaction", "confirm_evm_transaction"]
 
 [[permission]]
 identifier = "allow-tx-broadcast"
@@ -85,8 +93,8 @@ commands.allow = [
 
 [[permission]]
 identifier = "allow-air-gapped-controls"
-description = "Allow toggling and querying Air-Gapped Safe Mode status"
-commands.allow = ["set_air_gapped_mode", "get_air_gapped_mode"]
+description = "Allow controlling Safe Mode and checking a read-only authenticated network gate"
+commands.allow = ["set_air_gapped_mode", "get_air_gapped_mode", "verify_online_network_access"]
 
 [[permission]]
 identifier = "allow-recovery-session"
@@ -104,4 +112,9 @@ commands.allow = [
 identifier = "allow-price-feed"
 description = "Allow fetching live multi-currency token prices from oracle feed"
 commands.allow = ["get_token_prices"]
+
+[[permission]]
+identifier = "allow-official-token-metadata"
+description = "Allow fetching official token metadata through a session- and Safe Mode-gated native RPC"
+commands.allow = ["get_official_token_metadata"]
 

@@ -1,8 +1,9 @@
-import { createContext, useContext, useEffect, useRef, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, useCallback, useMemo, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { ScanProgress, ToastMessage, ToastType, WalletView } from "../lib/types";
-import { hasFundsForWallet, totalBalanceForWallet } from "../lib/chains";
-import { clearSweptBalanceDb } from "../lib/db";
+import type { ScanProgress, WalletView } from "../lib/types/index";
+import type { ToastMessage, ToastType } from "./types/toast";
+import { hasFundsForWallet, totalBalanceForWallet } from "../lib/chains/chains";
+import { clearSweptBalanceDb } from "../lib/db/db";
 import { solanaWs } from "../services/solanaWsService";
 import { useToastState } from "./hooks/useToastState";
 import { useWalletFilters } from "./hooks/useWalletFilters";
@@ -49,6 +50,7 @@ interface AppContextValue {
   ) => Promise<{ added: number; skipped: number }>;
   scanAll: () => Promise<void>;
   scanOne: (id: number) => Promise<void>;
+  refreshWallets: (targets: WalletView[], chainKey?: string) => Promise<void>;
   removeWallet: (id: number, password: string) => Promise<{ success: boolean; error?: string }>;
   resetAllWallets: (password: string) => Promise<{ success: boolean; error?: string }>;
   exportWallets: (format: "txt" | "csv") => Promise<void>;
@@ -58,6 +60,7 @@ interface AppContextValue {
   autoLockMinutes: number;
   setAutoLockMinutes: (mins: number) => void;
   isAirGapped: boolean;
+  networkSessionReady: boolean;
   toggleAirGapped: () => void;
   optimisticClearSweptWalletBalance: (
     walletId: number,
@@ -76,11 +79,10 @@ const AppContext = createContext<AppContextValue | null>(null);
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const { toasts, toast } = useToastState();
-  const pricing = useTokenPrices();
 
   // Mutable references for cross-hook synchronization without circular calls
   const loadWalletsRef = useRef<(tokenOverride?: string) => Promise<WalletView[]>>(async () => []);
-  const scanWalletsRef = useRef<((targets: WalletView[]) => Promise<{ funded: number; errors: number }>) | undefined>(undefined);
+  const scanWalletsRef = useRef<((targets: WalletView[]) => Promise<{ funded: number; errors: number; started: boolean; cancelled: boolean }>) | undefined>(undefined);
   const setSelectedIdRef = useRef<React.Dispatch<React.SetStateAction<number | null>>>(() => {});
   const setSelectedSweepIdsRef = useRef<React.Dispatch<React.SetStateAction<Set<number>>>>(() => {});
 
@@ -89,6 +91,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     toast,
     loadWallets: (tokenOverride?: string) => loadWalletsRef.current(tokenOverride),
   });
+  const pricing = useTokenPrices(auth.sessionToken, auth.screen === "app");
 
   // 2. Core Wallet State & Operations Hook (Instantiated ONCE with live session token)
   const walletOps = useWalletOperations({
@@ -96,7 +99,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     sessionToken: auth.sessionToken,
     setSelectedId: (action) => setSelectedIdRef.current(action),
     setSelectedSweepIds: (action) => setSelectedSweepIdsRef.current(action),
-    scanWallets: (targets) => scanWalletsRef.current?.(targets) ?? Promise.resolve({ funded: 0, errors: 0 }),
+    scanWallets: (targets) => scanWalletsRef.current?.(targets) ?? Promise.resolve({ funded: 0, errors: 0, started: false, cancelled: false }),
     getUsd: pricing.getUsd,
   });
   loadWalletsRef.current = walletOps.loadWallets;
@@ -115,6 +118,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
     enrich: walletOps.enrich,
   });
   scanWalletsRef.current = scanner.scanWallets;
+  const [nativeOnlineSessionReady, setNativeOnlineSessionReady] = useState(false);
+
+  const walletsRef = useRef(walletOps.wallets);
+  const previousOnlineSessionRef = useRef(false);
+  walletsRef.current = walletOps.wallets;
+  const selectedIdsRef = useRef(filters.selectedSweepIds);
+  selectedIdsRef.current = filters.selectedSweepIds;
+  const refreshWalletsRef = useRef(scanner.refreshWallets);
+  refreshWalletsRef.current = scanner.refreshWallets;
+  const selectedWallets = useMemo(
+    () => walletOps.wallets.filter((wallet) => filters.selectedSweepIds.has(wallet.id)),
+    [walletOps.wallets, filters.selectedSweepIds],
+  );
+  const selectedSolWallets = useMemo(
+    () => selectedWallets.filter((wallet) => Boolean(wallet.solAddress)),
+    [selectedWallets],
+  );
+  const selectedSolAddressKey = useMemo(
+    () => selectedSolWallets
+      .map((wallet) => wallet.solAddress!)
+      .filter(Boolean)
+      .sort()
+      .join(","),
+    [selectedSolWallets],
+  );
 
   // Reactive Multi-Chain Address Backfill (Native Scoped Rust Execution)
   useEffect(() => {
@@ -147,41 +175,148 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, [auth.sessionToken, walletOps.wallets, walletOps.loadWallets]);
 
-  // ── Solana WebSocket Real-Time Balance Synchronization (Helius WSS) ──
+  // Renderer WebSockets cannot consult the native gate on each frame, so keep
+  // them behind a read-only native session/Safe Mode liveness check.
   useEffect(() => {
-    const solAddrs = walletOps.wallets
-      .map((w) => w.solAddress)
-      .filter((a): a is string => Boolean(a && a.length > 20));
+    let cancelled = false;
+    let checking = false;
+    setNativeOnlineSessionReady(false);
 
-    if (solAddrs.length > 0) {
-      solanaWs.setWatchedAddresses(solAddrs);
+    if (
+      auth.screen !== "app" ||
+      !auth.sessionToken ||
+      scanner.isAirGapped ||
+      !scanner.networkGateReady
+    ) {
+      return () => {
+        cancelled = true;
+        setNativeOnlineSessionReady(false);
+      };
     }
-  }, [walletOps.wallets]);
 
+    const checkNativeSession = async () => {
+      if (cancelled || checking) return;
+      checking = true;
+      try {
+        await invoke("verify_online_network_access", { sessionToken: auth.sessionToken });
+        if (!cancelled) setNativeOnlineSessionReady(true);
+      } catch (error) {
+        if (!cancelled) {
+          setNativeOnlineSessionReady(false);
+          if (!String(error).includes("Safe Mode is active")) auth.lock();
+        }
+      } finally {
+        checking = false;
+      }
+    };
+
+    void checkNativeSession();
+    const interval = window.setInterval(() => void checkNativeSession(), 5_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      setNativeOnlineSessionReady(false);
+    };
+  }, [auth.screen, auth.sessionToken, auth.lock, scanner.networkGateReady, scanner.isAirGapped]);
+
+  // Stale market snapshots are explicitly marked offline, and turning Online
+  // back on refreshes them only after an authenticated vault session exists.
   useEffect(() => {
-    const unsub = solanaWs.subscribeAccountUpdates((update) => {
-      walletOps.setWallets((prev) =>
-        prev.map((w) => {
-          if (w.solAddress !== update.address) return w;
-          const currentSol = w.balances.sol;
-          if (currentSol === update.solFormatted) return w;
+    const onlineSession = auth.screen === "app" && Boolean(auth.sessionToken) && scanner.networkGateReady &&
+      nativeOnlineSessionReady && !scanner.isAirGapped;
+    if (!onlineSession) {
+      pricing.markStale();
+    } else if (!previousOnlineSessionRef.current) {
+      void pricing.refreshPrices();
+    }
+    previousOnlineSessionRef.current = onlineSession;
+  }, [auth.screen, auth.sessionToken, scanner.networkGateReady, nativeOnlineSessionReady, scanner.isAirGapped, pricing.markStale, pricing.refreshPrices]);
 
-          const updatedBalances = { ...w.balances, sol: update.solFormatted };
-          const hasFunds = hasFundsForWallet(updatedBalances, w.type, w.tokens);
-          const totalBalance = totalBalanceForWallet(updatedBalances, w.type);
+  // Keep all network transports behind the same explicit online + unlocked gate.
+  // The dashboard only opens subscriptions for wallets checked in the sidebar.
+  useEffect(() => {
+    const appIsOnline = auth.screen === "app" && Boolean(auth.sessionToken) && scanner.networkGateReady && nativeOnlineSessionReady && !scanner.isAirGapped;
+    const selectedSolAddresses = selectedSolAddressKey ? selectedSolAddressKey.split(",") : [];
+    solanaWs.setWatchedAddresses(appIsOnline ? selectedSolAddresses : []);
+    solanaWs.setEnabled(appIsOnline && selectedSolAddresses.length > 0, appIsOnline ? auth.sessionToken : null);
+  }, [auth.screen, auth.sessionToken, scanner.networkGateReady, nativeOnlineSessionReady, scanner.isAirGapped, selectedSolAddressKey]);
 
-          return {
-            ...w,
-            balances: updatedBalances,
-            hasFunds,
-            totalBalance,
-          };
-        })
-      );
+  useEffect(() => () => {
+    solanaWs.setWatchedAddresses([]);
+    solanaWs.setEnabled(false);
+  }, []);
+
+  // Subscribe once; address and wallet selection lookups use refs so reloading
+  // wallet state after a scan does not churn subscriptions or lose queued events.
+  useEffect(() => {
+    const pendingRefreshes = new Map<string, number>();
+
+    const queueWalletRefresh = (walletId: number, chainKey: string) => {
+      const key = `${walletId}:${chainKey}`;
+      const existing = pendingRefreshes.get(key);
+      if (existing !== undefined) window.clearTimeout(existing);
+      const timer = window.setTimeout(() => {
+        pendingRefreshes.delete(key);
+        const wallet = walletsRef.current.find(
+          (candidate) => candidate.id === walletId && selectedIdsRef.current.has(candidate.id),
+        );
+        if (wallet) void refreshWalletsRef.current([wallet], chainKey);
+      }, 1_200);
+      pendingRefreshes.set(key, timer);
+    };
+
+    const unsubscribeAccountUpdates = solanaWs.subscribeAccountUpdates((update) => {
+      const wallet = walletsRef.current.find((candidate) => candidate.solAddress === update.address);
+      if (!wallet || !selectedIdsRef.current.has(wallet.id)) return;
+
+      walletOps.setWallets((previous) => previous.map((candidate) => {
+        if (candidate.id !== wallet.id || candidate.balances.sol === update.solFormatted) return candidate;
+        const balances = { ...candidate.balances, sol: update.solFormatted };
+        return {
+          ...candidate,
+          balances,
+          hasFunds: hasFundsForWallet(balances, candidate.type, candidate.tokens),
+          totalBalance: totalBalanceForWallet(balances, candidate.type),
+        };
+      }));
+      queueWalletRefresh(wallet.id, "sol");
     });
 
-    return unsub;
+    const unsubscribeSolanaTransactions = solanaWs.subscribeTransactions((update) => {
+      const wallet = walletsRef.current.find((candidate) => candidate.solAddress === update.address);
+      if (wallet && selectedIdsRef.current.has(wallet.id)) queueWalletRefresh(wallet.id, "sol");
+    });
+
+    return () => {
+      unsubscribeAccountUpdates();
+      unsubscribeSolanaTransactions();
+      for (const timer of pendingRefreshes.values()) window.clearTimeout(timer);
+      pendingRefreshes.clear();
+    };
   }, [walletOps.setWallets]);
+
+  // Recovery path: refresh selected wallets after selection changes and poll every
+  // 45 seconds. This recovers missed Solana WSS notices and is the update path for
+  // Robinhood Chain, whose credentialed renderer WebSocket provider is disabled.
+  useEffect(() => {
+    if (
+      auth.screen !== "app" || !auth.sessionToken || scanner.isAirGapped ||
+      !scanner.networkGateReady || !nativeOnlineSessionReady || filters.selectedSweepIds.size === 0
+    ) {
+      return;
+    }
+
+    const refreshSelectedWallets = () => {
+      const targets = walletsRef.current.filter(
+        (wallet) => filters.selectedSweepIds.has(wallet.id),
+      );
+      if (targets.length > 0) void refreshWalletsRef.current(targets);
+    };
+
+    refreshSelectedWallets();
+    const interval = window.setInterval(refreshSelectedWallets, 45_000);
+    return () => window.clearInterval(interval);
+  }, [auth.screen, auth.sessionToken, scanner.isAirGapped, scanner.networkGateReady, nativeOnlineSessionReady, filters.selectedSweepIds]);
 
   const optimisticClearSweptWalletBalance = useCallback(
     (walletId: number, chainKey: string, tokenMintOrAddress?: string, symbol?: string) => {
@@ -256,6 +391,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     importWallets: walletOps.importWallets,
     scanAll: scanner.scanAll,
     scanOne: scanner.scanOne,
+    refreshWallets: scanner.refreshWallets,
     removeWallet: walletOps.removeWallet,
     resetAllWallets: walletOps.resetAllWallets,
     exportWallets: walletOps.exportWallets,
@@ -265,6 +401,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     autoLockMinutes: auth.autoLockMinutes,
     setAutoLockMinutes: auth.setAutoLockMinutes,
     isAirGapped: scanner.isAirGapped,
+    networkSessionReady: nativeOnlineSessionReady,
     toggleAirGapped: scanner.toggleAirGapped,
     optimisticClearSweptWalletBalance,
     toast,

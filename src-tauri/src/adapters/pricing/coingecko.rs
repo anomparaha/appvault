@@ -70,9 +70,19 @@ pub fn parse_coingecko_json(json_val: &serde_json::Value) -> HashMap<String, Pri
 }
 
 /// Retrieve prices from memory cache if fresh (<60s), or query CoinGecko API
+#[cfg(test)]
 pub async fn get_cached_or_fetch_prices(
     requested_ids: Option<Vec<String>>,
 ) -> Result<PriceReport, String> {
+    let permissive_gate = || Ok(());
+    get_cached_or_fetch_prices_with_gate(requested_ids, &permissive_gate).await
+}
+
+pub async fn get_cached_or_fetch_prices_with_gate(
+    requested_ids: Option<Vec<String>>,
+    network_gate: &crate::adapters::network::NetworkAccessGate,
+) -> Result<PriceReport, String> {
+    network_gate()?;
     // 1. Check existing in-memory cache
     if let Ok(guard) = PRICE_CACHE.read() {
         if let Some(ref cached) = *guard {
@@ -114,42 +124,66 @@ pub async fn get_cached_or_fetch_prices(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let resp = client.get(&url).send().await;
+    let request = client.get(&url).send();
+    let response = match crate::adapters::network::await_with_gate(
+        async move { request.await.map_err(crate::adapters::network::redact_reqwest_error) },
+        network_gate,
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(_) => {
+            network_gate()?;
+            return fallback_stale();
+        }
+    };
 
-    match resp {
-        Ok(res) if res.status().is_success() => {
-            if let Ok(json_body) = res.json::<serde_json::Value>().await {
-                let parsed_prices = parse_coingecko_json(&json_body);
-
-                let now_unix = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
-
-                let report = PriceReport {
-                    prices: parsed_prices,
-                    fetched_at_unix: now_unix,
-                    stale: false,
-                };
-
-                // Update cache
-                if let Ok(mut write_guard) = PRICE_CACHE.write() {
-                    *write_guard = Some(CachedPriceState {
-                        report: report.clone(),
-                        last_fetched: Instant::now(),
-                    });
-                }
-
-                Ok(report)
-            } else {
-                // Fallback to stale cache or baseline
-                fallback_stale()
+    if response.status().is_success() {
+        let mut response = response;
+        let body = match crate::adapters::network::read_response_limited(
+            &mut response,
+            256_000,
+            network_gate,
+        )
+        .await
+        {
+            Ok(body) => body,
+            Err(_) => {
+                network_gate()?;
+                return fallback_stale();
             }
+        };
+        let Ok(json_body) = serde_json::from_slice::<serde_json::Value>(&body) else {
+            network_gate()?;
+            return fallback_stale();
+        };
+        network_gate()?;
+        let parsed_prices = parse_coingecko_json(&json_body);
+
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+
+        let report = PriceReport {
+            prices: parsed_prices,
+            fetched_at_unix: now_unix,
+            stale: false,
+        };
+
+        // Update cache only after confirming the authenticated online gate.
+        network_gate()?;
+        if let Ok(mut write_guard) = PRICE_CACHE.write() {
+            *write_guard = Some(CachedPriceState {
+                report: report.clone(),
+                last_fetched: Instant::now(),
+            });
         }
-        _ => {
-            // Network failed or rate limited: return stale cache or baseline
-            fallback_stale()
-        }
+        Ok(report)
+    } else {
+        network_gate()?;
+        // Network failed or rate limited: return stale cache or baseline.
+        fallback_stale()
     }
 }
 

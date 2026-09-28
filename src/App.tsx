@@ -1,8 +1,8 @@
 import { AppProvider, useApp } from "./context/AppContext";
-import { SetupScreen, UnlockScreen } from "./components/AuthScreens";
-import { MainApp } from "./components/MainApp";
-import { ToastContainer } from "./components/Toast";
-import { GlobalTooltip } from "./components/GlobalTooltip";
+import { SetupScreen, UnlockScreen } from "./components/auth/AuthScreens";
+import { MainApp } from "./components/layout/MainApp";
+import { ToastContainer } from "./components/layout/Toast";
+import { GlobalTooltip } from "./components/layout/GlobalTooltip";
 
 function AppRouter() {
   const { screen, initError } = useApp();

@@ -6,12 +6,22 @@ import {
   saveMasterPassword,
   hasPin as checkDbHasPin,
   resetEntireVault,
-} from '../../lib/db';
+} from '../../lib/db/db';
 import {
   createVerificationToken,
-} from '../../lib/crypto';
-import { logActivity } from '../../lib/activity';
-import type { ToastType } from '../../lib/types';
+} from '../../lib/crypto/crypto';
+import { logActivity } from '../../lib/services/activity';
+import { cancelActiveAddressInspections } from '../../lib/services/addressInspector';
+import { cancelActiveTokenPriceRequests } from '../../services/tokenPriceService';
+import { solanaWs } from '../../services/solanaWsService';
+import type { ToastType } from '../types/toast';
+
+function stopRendererNetworkActivity(): void {
+  cancelActiveAddressInspections();
+  cancelActiveTokenPriceRequests();
+  solanaWs.setWatchedAddresses([]);
+  solanaWs.setEnabled(false);
+}
 
 export type Screen = 'loading' | 'setup' | 'unlock' | 'app' | 'error';
 
@@ -53,6 +63,7 @@ export function useAuthVault({ toast, loadWallets }: UseAuthVaultProps) {
 
   // 2. Auto-Lock Timer & Inactivity Listener
   const lock = useCallback(() => {
+    stopRendererNetworkActivity();
     setSessionToken('');
     setScreen('unlock');
     invoke('vault_session_lock').catch(() => {});
@@ -178,7 +189,7 @@ export function useAuthVault({ toast, loadWallets }: UseAuthVaultProps) {
       logActivity({
         type: "security",
         title: "Vault Unlocked (Quick PIN)",
-        desc: "Authenticated via hardware-isolated 4-digit PIN",
+        desc: "Authenticated with the scoped local PIN session",
         amount: "Unlocked",
         amountColor: "var(--ok)",
         status: "success",
@@ -194,6 +205,7 @@ export function useAuthVault({ toast, loadWallets }: UseAuthVaultProps) {
 
   // 6. Reset Entire Vault (Forgot Password Flow)
   const resetVault = async (confirmation: string) => {
+    stopRendererNetworkActivity();
     await resetEntireVault(confirmation, sessionToken);
     await invoke('vault_session_lock').catch(() => {});
     setSessionToken('');

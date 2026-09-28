@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
-import type { WalletView } from "../lib/types";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import type { WalletView } from "../lib/types/index";
 
 export interface OfficialTokenInfo {
   contractAddress: string;
@@ -44,85 +45,43 @@ export const OFFICIAL_TOKEN_SPEC: OfficialTokenInfo = {
 };
 
 /**
- * ABI string decoder for dynamic eth_call responses.
- */
-function decodeAbiString(hex?: string): string {
-  if (!hex || hex === "0x") return "";
-  const clean = hex.replace(/^0x/, "");
-  if (clean.length >= 128) {
-    try {
-      const length = parseInt(clean.substring(64, 128), 16);
-      const dataHex = clean.substring(128, 128 + length * 2);
-      const bytes: number[] = [];
-      for (let i = 0; i < dataHex.length; i += 2) {
-        bytes.push(parseInt(dataHex.substring(i, i + 2), 16));
-      }
-      return new TextDecoder().decode(new Uint8Array(bytes)).replace(/\0/g, "").trim();
-    } catch {
-      return "";
-    }
-  }
-  return "";
-}
-
-/**
- * Resolves IPFS URI to public web gateway or local fallback.
- */
-export function resolveTokenLogoUrl(ipfsOrUrl?: string): string {
-  if (!ipfsOrUrl) return OFFICIAL_TOKEN_SPEC.logoUrl;
-  if (ipfsOrUrl.startsWith("ipfs://")) {
-    const cid = ipfsOrUrl.replace(/^ipfs:\/\//, "");
-    return `https://gateway.pinata.cloud/ipfs/${cid}`;
-  }
-  return ipfsOrUrl;
-}
-
-/**
  * Fetches real-time metadata directly from Robinhood Chain RPC.
  */
-export async function fetchOfficialTokenFromRpc(): Promise<Partial<OfficialTokenInfo>> {
-  const rpcUrl = "https://api.zan.top/node/v1/robinhood/mainnet/9f2590af4fda43418ca4f0e8ded27af5";
-  const contract = OFFICIAL_TOKEN_SPEC.contractAddress;
+function assertMetadataNetworkAllowed(sessionToken: string, isAirGapped: boolean): void {
+  if (!sessionToken?.trim()) throw new Error("Unlock the vault before fetching token metadata.");
+  if (isAirGapped) throw new Error("Safe Mode blocks token metadata network requests.");
+}
 
-  const calls = [
-    { method: "0x06fdde03", key: "name" },
-    { method: "0x95d89b41", key: "symbol" },
-    { method: "0x7284e416", key: "description" },
-    { method: "0xfb7f21eb", key: "logo" },
-  ];
+export async function fetchOfficialTokenFromRpc(
+  sessionToken: string,
+  isAirGapped: boolean,
+  signal?: AbortSignal,
+): Promise<Partial<OfficialTokenInfo>> {
+  assertMetadataNetworkAllowed(sessionToken, isAirGapped);
+  if (signal?.aborted) throw new DOMException("Metadata request cancelled", "AbortError");
 
   try {
-    const results: Record<string, string> = {};
-    for (const call of calls) {
-      const res = await fetch(rpcUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method: "eth_call",
-          params: [{ to: contract, data: call.method }, "latest"],
-        }),
-      });
-      if (res.ok) {
-        const json = await res.json();
-        if (json.result) {
-          results[call.key] = decodeAbiString(json.result);
-        }
-      }
-    }
-
-    const resolvedLogo = results.logo ? resolveTokenLogoUrl(results.logo) : OFFICIAL_TOKEN_SPEC.logoUrl;
-
+    // Do not call RPCs from the webview: the native command revalidates both the
+    // vault session and Safe Mode immediately before each network request.
+    const metadata = await invoke<{
+      name?: string | null;
+      symbol?: string | null;
+      description?: string | null;
+      ipfsLogo?: string | null;
+    }>("get_official_token_metadata", { sessionToken });
+    if (signal?.aborted) throw new DOMException("Metadata request cancelled", "AbortError");
     return {
-      name: results.name || OFFICIAL_TOKEN_SPEC.name,
-      symbol: results.symbol || OFFICIAL_TOKEN_SPEC.symbol,
-      description: results.description || OFFICIAL_TOKEN_SPEC.description,
-      ipfsLogo: results.logo || OFFICIAL_TOKEN_SPEC.ipfsLogo,
-      logoUrl: resolvedLogo,
+      name: metadata.name || undefined,
+      symbol: metadata.symbol || undefined,
+      description: metadata.description || undefined,
+      ipfsLogo: metadata.ipfsLogo || undefined,
+      // Render only the bundled logo; never turn an on-chain URI into a browser
+      // request that could track the user's IP or trigger an arbitrary fetch.
+      logoUrl: OFFICIAL_TOKEN_SPEC.logoUrl,
     };
   } catch (err) {
-    console.warn("RPC token metadata query fallback:", err);
+    if (signal?.aborted) throw err;
+    console.warn("Native RPC token metadata query fallback:", err);
     return {};
   }
 }
@@ -133,25 +92,14 @@ export async function fetchOfficialTokenFromRpc(): Promise<Partial<OfficialToken
 export function calculateVaultTokenHoldings(wallets: WalletView[]): number {
   if (!wallets || wallets.length === 0) return 0;
   let total = 0;
-  const targetContract = OFFICIAL_TOKEN_SPEC.contractAddress.toLowerCase();
-  const targetSymbol = OFFICIAL_TOKEN_SPEC.symbol.replace(/^\$/, "").toLowerCase();
 
   for (const w of wallets) {
-    if (w.tokens && w.tokens.length > 0) {
-      for (const t of w.tokens) {
-        const matchesContract = Boolean(
-          t.contractAddress && t.contractAddress.toLowerCase() === targetContract
-        );
-        const cleanSymbol = t.symbol.replace(/^\$/, "").toLowerCase();
-        const matchesSymbol = cleanSymbol === targetSymbol;
-
-        if (matchesContract || matchesSymbol) {
-          const num = parseFloat(t.balance);
-          if (Number.isFinite(num) && num > 0) {
-            total += num;
-          }
-        }
-      }
+    for (const token of w.tokens || []) {
+      // Symbols and names are issuer-controlled metadata. Only the canonical contract
+      // on its configured chain can represent the official asset.
+      if (!isOfficialTokenRecord(token)) continue;
+      const amount = Number.parseFloat(token.balance);
+      if (Number.isFinite(amount) && amount > 0) total += amount;
     }
   }
   return total;
@@ -160,90 +108,76 @@ export function calculateVaultTokenHoldings(wallets: WalletView[]): number {
 /**
  * Checks if a specific token record matches the official token.
  */
-export function isOfficialTokenRecord(token: { symbol?: string; contractAddress?: string }): boolean {
-  if (!token) return false;
-  const targetContract = OFFICIAL_TOKEN_SPEC.contractAddress.toLowerCase();
-  if (token.contractAddress && token.contractAddress.toLowerCase() === targetContract) {
-    return true;
-  }
-  const cleanSym = (token.symbol || "").replace(/^\$/, "").toLowerCase();
-  const targetSym = OFFICIAL_TOKEN_SPEC.symbol.replace(/^\$/, "").toLowerCase();
-  return cleanSym === targetSym;
+export function isOfficialTokenRecord(token: { chain?: string; contractAddress?: string } | null | undefined): boolean {
+  if (!token?.chain || !token.contractAddress) return false;
+  return token.chain.trim().toLowerCase() === OFFICIAL_TOKEN_SPEC.chain &&
+    token.contractAddress.trim().toLowerCase() === OFFICIAL_TOKEN_SPEC.contractAddress.toLowerCase();
 }
 
 /**
  * Decoupled data-fetching service for the official token.
  * Easily extensible for future backend endpoints, indexers, or on-chain oracles.
  */
-export async function fetchOfficialTokenData(customEndpoint?: string): Promise<OfficialTokenInfo> {
-  const endpoint = customEndpoint || (import.meta as any).env?.VITE_OFFICIAL_TOKEN_API;
+export async function fetchOfficialTokenData(
+  sessionToken: string,
+  isAirGapped: boolean,
+  signal?: AbortSignal,
+): Promise<OfficialTokenInfo> {
+  assertMetadataNetworkAllowed(sessionToken, isAirGapped);
+  const rpcData = await fetchOfficialTokenFromRpc(sessionToken, isAirGapped, signal);
+  if (signal?.aborted) throw new DOMException("Metadata request cancelled", "AbortError");
 
-  let rpcData: Partial<OfficialTokenInfo> = {};
-  try {
-    rpcData = await fetchOfficialTokenFromRpc();
-  } catch {
-    // fallback to default
-  }
-
-  if (!endpoint) {
-    return {
-      ...OFFICIAL_TOKEN_SPEC,
-      ...rpcData,
-      logoUrl: OFFICIAL_TOKEN_SPEC.logoUrl,
-    };
-  }
-
-  try {
-    const res = await fetch(endpoint, {
-      method: "GET",
-      headers: { Accept: "application/json" },
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
-    return {
-      ...OFFICIAL_TOKEN_SPEC,
-      ...rpcData,
-      name: json.name || rpcData.name || OFFICIAL_TOKEN_SPEC.name,
-      symbol: json.symbol || rpcData.symbol || OFFICIAL_TOKEN_SPEC.symbol,
-      marketData: json.marketData,
-      logoUrl: OFFICIAL_TOKEN_SPEC.logoUrl,
-    };
-  } catch (err) {
-    console.warn("Using baseline official token specification:", err);
-    return {
-      ...OFFICIAL_TOKEN_SPEC,
-      ...rpcData,
-      logoUrl: OFFICIAL_TOKEN_SPEC.logoUrl,
-    };
-  }
+  return {
+    ...OFFICIAL_TOKEN_SPEC,
+    ...rpcData,
+    // Keep logos bundled and local: dynamic token-controlled URLs must not cause
+    // an unsolicited third-party image request from the webview.
+    logoUrl: OFFICIAL_TOKEN_SPEC.logoUrl,
+  };
 }
 
 /**
  * React hook to consume official token data and vault holdings reactively.
  */
-export function useOfficialToken(wallets: WalletView[] = []) {
+export function useOfficialToken(wallets: WalletView[] = [], sessionToken = "", isAirGapped = true) {
+  const enabled = Boolean(sessionToken.trim()) && !isAirGapped;
   const [tokenInfo, setTokenInfo] = useState<OfficialTokenInfo>(OFFICIAL_TOKEN_SPEC);
   const [loading, setLoading] = useState(false);
+  const requestControllerRef = useRef<AbortController | null>(null);
 
   const vaultHoldings = useMemo(() => {
     return calculateVaultTokenHoldings(wallets);
   }, [wallets]);
 
   const refresh = useCallback(async () => {
+    if (!enabled) return;
+    requestControllerRef.current?.abort();
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
     setLoading(true);
     try {
-      const data = await fetchOfficialTokenData();
-      setTokenInfo(data);
-    } catch {
-      // ignore
+      const data = await fetchOfficialTokenData(sessionToken, isAirGapped, controller.signal);
+      if (!controller.signal.aborted) setTokenInfo(data);
+    } catch (error) {
+      if (!controller.signal.aborted) console.warn("Official token metadata refresh failed:", error);
     } finally {
-      setLoading(false);
+      if (requestControllerRef.current === controller) {
+        requestControllerRef.current = null;
+        setLoading(false);
+      }
     }
-  }, []);
+  }, [enabled, sessionToken, isAirGapped]);
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    if (enabled) {
+      void refresh();
+    } else {
+      requestControllerRef.current?.abort();
+      requestControllerRef.current = null;
+      setLoading(false);
+    }
+    return () => requestControllerRef.current?.abort();
+  }, [enabled, refresh]);
 
   return {
     token: tokenInfo,

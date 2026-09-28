@@ -18,29 +18,99 @@ pub fn get_air_gapped_mode() -> Result<bool, String> {
     Ok(AIR_GAPPED_MODE.load(Ordering::SeqCst))
 }
 
+#[tauri::command]
+pub fn verify_online_network_access(session_token: String) -> Result<(), String> {
+    if !crate::core::security::session::get_session_manager()
+        .is_authenticated_without_touch(&session_token)
+    {
+        return Err("Action denied: Active unlocked vault session required.".to_string());
+    }
+    verify_air_gap_inactive()
+}
+
 pub fn verify_air_gap_inactive() -> Result<(), String> {
     if AIR_GAPPED_MODE.load(Ordering::SeqCst) {
-        return Err("Air-Gapped Safe Mode is ACTIVE: Outbound network blocked.".to_string());
+        return Err("Safe Mode is active: app-command network requests are disabled.".to_string());
     }
     Ok(())
+}
+
+fn verify_authenticated_network_access(session_token: &str) -> Result<(), String> {
+    // Network activity must not reset the vault's idle timeout. Each request is
+    // still revalidated natively, but only explicit vault operations count as use.
+    if !crate::core::security::session::get_session_manager()
+        .is_authenticated_without_touch(session_token)
+    {
+        return Err("Action denied: Active unlocked vault session required.".to_string());
+    }
+    verify_air_gap_inactive()
+}
+
+fn authenticated_network_gate(session_token: &str) -> crate::core::scanner::NetworkAccessGate {
+    let token = session_token.to_string();
+    std::sync::Arc::new(move || verify_authenticated_network_access(&token))
+}
+
+async fn send_http_request_with_gate<F>(
+    request: F,
+    session_token: &str,
+) -> Result<reqwest::Response, String>
+where
+    F: std::future::Future<Output = Result<reqwest::Response, reqwest::Error>>,
+{
+    let network_gate = authenticated_network_gate(session_token);
+    crate::adapters::network::await_with_gate(
+        async move {
+            request
+                .await
+                .map_err(crate::adapters::network::redact_reqwest_error)
+        },
+        network_gate.as_ref(),
+    )
+    .await
+}
+
+async fn read_http_text_limited(
+    mut response: reqwest::Response,
+    max_bytes: usize,
+    session_token: &str,
+) -> Result<String, String> {
+    let network_gate = authenticated_network_gate(session_token);
+    let body = crate::adapters::network::read_response_limited(
+        &mut response,
+        max_bytes,
+        network_gate.as_ref(),
+    )
+    .await?;
+    String::from_utf8(body).map_err(|_| "HTTP response is not valid UTF-8".to_string())
 }
 
 #[tauri::command]
 pub async fn scan_balances(
     app: tauri::AppHandle,
+    session_token: String,
     wallet_id: Option<i64>,
     wallet_ids: Option<Vec<i64>>,
+    chain_key: Option<String>,
 ) -> Result<ScanSummary, String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
     if AIR_GAPPED_MODE.load(Ordering::SeqCst) {
-        return Err("Air-Gapped Safe Mode is ACTIVE: Outbound network blocked.".to_string());
+        return Err("Safe Mode is active: app-command network requests are disabled.".to_string());
     }
-    execute_scan_balances(app, wallet_id, wallet_ids).await
+    let gate_session_token = session_token.clone();
+    let network_gate: crate::core::scanner::NetworkAccessGate =
+        std::sync::Arc::new(move || verify_authenticated_network_access(&gate_session_token));
+    execute_scan_balances(app, wallet_id, wallet_ids, chain_key, network_gate).await
 }
 
 #[tauri::command]
-pub async fn get_chain_fee_data(chain_key: String) -> Result<ChainFeeResponse, String> {
+pub async fn get_chain_fee_data(
+    session_token: String,
+    chain_key: String,
+) -> Result<ChainFeeResponse, String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
     if AIR_GAPPED_MODE.load(Ordering::SeqCst) {
-        return Err("Air-Gapped Safe Mode is ACTIVE: Outbound network blocked.".to_string());
+        return Err("Safe Mode is active: app-command network requests are disabled.".to_string());
     }
     let chain = CHAINS
         .iter()
@@ -57,27 +127,43 @@ pub async fn get_chain_fee_data(chain_key: String) -> Result<ChainFeeResponse, S
         });
     }
 
-    crate::adapters::evm::client::get_chain_fee_data(chain.key, chain.rpcs, chain.symbol).await
+    let network_gate = authenticated_network_gate(&session_token);
+    crate::adapters::evm::client::get_chain_fee_data_with_gate(
+        chain.key,
+        chain.rpcs,
+        chain.symbol,
+        network_gate.as_ref(),
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn get_account_nonce_and_balance(
+    session_token: String,
     chain_key: String,
     address: String,
 ) -> Result<AccountInfoResponse, String> {
-    if AIR_GAPPED_MODE.load(Ordering::SeqCst) {
-        return Err("Air-Gapped Safe Mode is ACTIVE: Outbound network blocked.".to_string());
-    }
+    crate::db::commands::verify_session_authenticated(&session_token)?;
+    verify_air_gap_inactive()?;
     let chain = CHAINS
         .iter()
         .find(|c| c.key == chain_key)
         .ok_or_else(|| "Chain not found".to_string())?;
+    let network_gate = authenticated_network_gate(&session_token);
 
     if chain.kind == ChainKind::Solana {
+        let last_error = "Failed to query Solana balance from all RPC nodes".to_string();
         for rpc in chain.rpcs {
+            network_gate.as_ref()()?;
             if let Ok(lamports_str) =
-                crate::adapters::solana::client::rpc_get_sol_balance(&address, rpc).await
+                crate::adapters::solana::client::rpc_get_sol_balance_with_gate(
+                    &address,
+                    rpc,
+                    network_gate.as_ref(),
+                )
+                .await
             {
+                network_gate.as_ref()?;
                 let lamports: u64 = lamports_str.parse().unwrap_or(0);
                 let sol_amt = (lamports as f64) / 1e9;
                 let formatted = format!("{:.6} SOL", sol_amt);
@@ -89,64 +175,622 @@ pub async fn get_account_nonce_and_balance(
                 });
             }
         }
-        return Err("Failed to query Solana balance from all RPC nodes".to_string());
+        network_gate.as_ref()?;
+        return Err(last_error);
     }
 
-    crate::adapters::evm::client::get_account_nonce_and_balance(
+    crate::adapters::evm::client::get_account_nonce_and_balance_with_gate(
         chain.key,
         chain.rpcs,
         chain.symbol,
         &address,
+        network_gate.as_ref(),
     )
     .await
 }
 
 #[tauri::command]
-pub async fn broadcast_raw_tx(chain_key: String, raw_tx: String) -> Result<String, String> {
+pub async fn broadcast_raw_tx(
+    session_token: String,
+    chain_key: String,
+    raw_tx: String,
+) -> Result<String, String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
     if AIR_GAPPED_MODE.load(Ordering::SeqCst) {
-        return Err("Air-Gapped Safe Mode is ACTIVE: Outbound network blocked.".to_string());
+        return Err("Safe Mode is active: app-command network requests are disabled.".to_string());
     }
     let chain = CHAINS
         .iter()
         .find(|c| c.key == chain_key)
         .ok_or_else(|| "Chain not found".to_string())?;
-    crate::adapters::evm::client::broadcast_raw_tx(chain.key, chain.rpcs, &raw_tx).await
+    let network_gate = authenticated_network_gate(&session_token);
+    crate::adapters::evm::client::broadcast_raw_tx_with_gate(
+        chain.key,
+        chain.rpcs,
+        &raw_tx,
+        network_gate.as_ref(),
+    )
+    .await
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvmTransactionConfirmation {
+    pub transaction_hash: String,
+    pub status: String,
+    pub block_number: Option<String>,
+    pub error: Option<serde_json::Value>,
 }
 
 #[tauri::command]
-pub async fn get_solana_recent_blockhash() -> Result<String, String> {
+pub async fn confirm_evm_transaction(
+    session_token: String,
+    chain_key: String,
+    transaction_hash: String,
+) -> Result<EvmTransactionConfirmation, String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
+    verify_air_gap_inactive()?;
+
+    let transaction_hash = transaction_hash.trim().to_ascii_lowercase();
+    if transaction_hash.len() != 66
+        || !transaction_hash.starts_with("0x")
+        || !transaction_hash[2..].chars().all(|character| character.is_ascii_hexdigit())
+    {
+        return Err("Invalid EVM transaction hash".to_string());
+    }
+    let chain = CHAINS
+        .iter()
+        .find(|candidate| candidate.key == chain_key.as_str() && candidate.kind == ChainKind::Evm)
+        .ok_or_else(|| format!("Unsupported EVM chain: {chain_key}"))?;
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(4))
+        .build()
+        .map_err(|error| format!("Failed to create EVM RPC client: {error}"))?;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+    let mut last_error: Option<serde_json::Value> = None;
+
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        for rpc in chain.rpcs {
+            verify_authenticated_network_access(&session_token)?;
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let request = client
+                .post(*rpc)
+                .header("Content-Type", "application/json")
+                .header("User-Agent", "Plurivex/1.0")
+                .json(&serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "eth_getTransactionReceipt",
+                    "params": [transaction_hash],
+                }))
+                .send();
+            let Ok(Ok(response)) = tokio::time::timeout(remaining, send_http_request_with_gate(request, &session_token)).await else {
+                continue;
+            };
+            if !response.status().is_success() {
+                continue;
+            }
+            let body_budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if body_budget.is_zero() {
+                break;
+            }
+            let Ok(Ok(body)) = tokio::time::timeout(
+                body_budget,
+                read_http_text_limited(response, 256_000, &session_token),
+            )
+            .await
+            else {
+                continue;
+            };
+            verify_authenticated_network_access(&session_token)?;
+            let Ok(data) = serde_json::from_str::<serde_json::Value>(&body) else {
+                continue;
+            };
+            if let Some(error) = data.get("error") {
+                last_error = Some(error.clone());
+                continue;
+            }
+            let Some(receipt) = data.get("result").filter(|value| !value.is_null()) else {
+                continue;
+            };
+            if receipt
+                .get("transactionHash")
+                .and_then(serde_json::Value::as_str)
+                .map(|hash| hash.eq_ignore_ascii_case(&transaction_hash))
+                != Some(true)
+            {
+                last_error = Some(serde_json::json!({"message": "RPC receipt hash did not match the requested transaction"}));
+                continue;
+            }
+            let block_number = receipt
+                .get("blockNumber")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            let status = receipt
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| value.strip_prefix("0x"))
+                .and_then(|value| u64::from_str_radix(value, 16).ok());
+            match status {
+                Some(1) => {
+                    return Ok(EvmTransactionConfirmation {
+                        transaction_hash,
+                        status: "confirmed".to_string(),
+                        block_number,
+                        error: None,
+                    });
+                }
+                Some(0) => {
+                    return Ok(EvmTransactionConfirmation {
+                        transaction_hash,
+                        status: "failed".to_string(),
+                        block_number,
+                        error: Some(serde_json::json!({"message": "EVM transaction reverted", "status": "0x0"})),
+                    });
+                }
+                _ => {
+                    last_error = Some(serde_json::json!({"message": "RPC receipt omitted a valid EVM status"}));
+                }
+            }
+        }
+        if tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        }
+    }
+
+    Ok(EvmTransactionConfirmation {
+        transaction_hash,
+        status: "pending".to_string(),
+        block_number: None,
+        error: last_error,
+    })
+}
+
+#[tauri::command]
+pub async fn get_solana_recent_blockhash(session_token: String) -> Result<String, String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
     if AIR_GAPPED_MODE.load(Ordering::SeqCst) {
-        return Err("Air-Gapped Safe Mode is ACTIVE: Outbound network blocked.".to_string());
+        return Err("Safe Mode is active: app-command network requests are disabled.".to_string());
     }
     let chain = CHAINS
         .iter()
         .find(|c| c.key == "sol")
         .ok_or_else(|| "Solana chain not found".to_string())?;
-    crate::adapters::solana::client::get_solana_recent_blockhash(chain.rpcs).await
+    let network_gate = authenticated_network_gate(&session_token);
+    crate::adapters::solana::client::get_solana_recent_blockhash_with_gate(
+        chain.rpcs,
+        network_gate.as_ref(),
+    )
+    .await
 }
 
 #[tauri::command]
-pub async fn broadcast_solana_tx(raw_tx_base64: String) -> Result<String, String> {
+pub async fn broadcast_solana_tx(
+    session_token: String,
+    raw_tx_base64: String,
+) -> Result<String, String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
     if AIR_GAPPED_MODE.load(Ordering::SeqCst) {
-        return Err("Air-Gapped Safe Mode is ACTIVE: Outbound network blocked.".to_string());
+        return Err("Safe Mode is active: app-command network requests are disabled.".to_string());
     }
     let chain = CHAINS
         .iter()
         .find(|c| c.key == "sol")
         .ok_or_else(|| "Solana chain not found".to_string())?;
-    crate::adapters::solana::client::broadcast_solana_tx(chain.rpcs, &raw_tx_base64).await
+    let network_gate = authenticated_network_gate(&session_token);
+    crate::adapters::solana::client::broadcast_solana_tx_with_gate(
+        chain.rpcs,
+        &raw_tx_base64,
+        network_gate.as_ref(),
+    )
+    .await
 }
 
 #[tauri::command]
-pub async fn get_solana_account_details(address: String) -> Result<SolanaAccountDetails, String> {
+pub async fn get_solana_account_details(
+    session_token: String,
+    address: String,
+) -> Result<SolanaAccountDetails, String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
     if AIR_GAPPED_MODE.load(Ordering::SeqCst) {
-        return Err("Air-Gapped Safe Mode is ACTIVE: Outbound network blocked.".to_string());
+        return Err("Safe Mode is active: app-command network requests are disabled.".to_string());
     }
     let chain = CHAINS
         .iter()
         .find(|c| c.key == "sol")
         .ok_or_else(|| "Solana chain not found".to_string())?;
-    crate::adapters::solana::client::get_solana_account_details(chain.rpcs, &address).await
+    let network_gate = || verify_authenticated_network_access(&session_token);
+    crate::adapters::solana::client::get_solana_account_details_with_gate(
+        chain.rpcs,
+        &address,
+        &network_gate,
+    )
+    .await
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SolanaMintInfo {
+    pub decimals: u8,
+    pub token_program_id: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OfficialTokenMetadata {
+    pub name: Option<String>,
+    pub symbol: Option<String>,
+    pub description: Option<String>,
+    pub ipfs_logo: Option<String>,
+}
+
+fn decode_evm_abi_string(result: &str) -> Option<String> {
+    let bytes = hex::decode(result.strip_prefix("0x")?).ok()?;
+    if bytes.len() < 64 {
+        return None;
+    }
+    let offset_word = &bytes[..32];
+    if offset_word[..24].iter().any(|byte| *byte != 0) {
+        return None;
+    }
+    let offset = usize::try_from(u64::from_be_bytes(offset_word[24..32].try_into().ok()?)).ok()?;
+    let length_end = offset.checked_add(32)?;
+    let length_word = bytes.get(offset..length_end)?;
+    if length_word[..24].iter().any(|byte| *byte != 0) {
+        return None;
+    }
+    let value_len = usize::try_from(u64::from_be_bytes(length_word[24..32].try_into().ok()?)).ok()?;
+    if value_len == 0 || value_len > 2048 {
+        return None;
+    }
+    let value_end = length_end.checked_add(value_len)?;
+    let value = std::str::from_utf8(bytes.get(length_end..value_end)?).ok()?;
+    let value = value.trim_matches('\0').trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+#[tauri::command]
+pub async fn get_official_token_metadata(
+    session_token: String,
+) -> Result<OfficialTokenMetadata, String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
+    verify_air_gap_inactive()?;
+    let chain = CHAINS
+        .iter()
+        .find(|candidate| candidate.key == "robinhood" && candidate.kind == ChainKind::Evm)
+        .ok_or_else(|| "Robinhood EVM chain is not configured".to_string())?;
+    const CONTRACT: &str = "0xf890d3fe2be22c6259bbe9f607692c7168556c93";
+    const CALLS: [(&str, &str); 4] = [
+        ("name", "0x06fdde03"),
+        ("symbol", "0x95d89b41"),
+        ("description", "0x7284e416"),
+        ("ipfs_logo", "0xfb7f21eb"),
+    ];
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|error| format!("Failed to create metadata RPC client: {error}"))?;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+    let mut metadata = OfficialTokenMetadata {
+        name: None,
+        symbol: None,
+        description: None,
+        ipfs_logo: None,
+    };
+
+    for (field, selector) in CALLS {
+        let mut decoded = None;
+        for rpc in chain.rpcs {
+            verify_air_gap_inactive()?;
+            crate::db::commands::verify_session_authenticated(&session_token)?;
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let request = client
+                .post(*rpc)
+                .header("Content-Type", "application/json")
+                .header("User-Agent", "Plurivex/1.0")
+                .json(&serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "eth_call",
+                    "params": [{"to": CONTRACT, "data": selector}, "latest"],
+                }))
+                .send();
+            let budget = remaining.min(std::time::Duration::from_secs(1));
+            let Ok(Ok(response)) = tokio::time::timeout(budget, send_http_request_with_gate(request, &session_token)).await else {
+                continue;
+            };
+            if !response.status().is_success() {
+                continue;
+            }
+            let body_budget = deadline
+                .saturating_duration_since(tokio::time::Instant::now())
+                .min(std::time::Duration::from_secs(1));
+            if body_budget.is_zero() {
+                break;
+            }
+            let Ok(Ok(body)) = tokio::time::timeout(
+                body_budget,
+                read_http_text_limited(response, 64_000, &session_token),
+            )
+            .await
+            else {
+                continue;
+            };
+            verify_authenticated_network_access(&session_token)?;
+            let Ok(data) = serde_json::from_str::<serde_json::Value>(&body) else {
+                continue;
+            };
+            if data.get("error").is_some() {
+                continue;
+            }
+            if let Some(value) = data
+                .get("result")
+                .and_then(serde_json::Value::as_str)
+                .and_then(decode_evm_abi_string)
+            {
+                decoded = Some(value);
+                break;
+            }
+        }
+        match field {
+            "name" => metadata.name = decoded,
+            "symbol" => metadata.symbol = decoded,
+            "description" => metadata.description = decoded,
+            "ipfs_logo" => metadata.ipfs_logo = decoded,
+            _ => unreachable!("metadata field is fixed above"),
+        }
+    }
+
+    crate::db::commands::verify_session_authenticated(&session_token)?;
+    verify_air_gap_inactive()?;
+    Ok(metadata)
+}
+
+#[tauri::command]
+pub async fn get_solana_mint_info(
+    session_token: String,
+    mint: String,
+) -> Result<SolanaMintInfo, String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
+    verify_air_gap_inactive()?;
+    let mint = mint.trim().to_string();
+    if mint.len() > 44 {
+        return Err("Invalid Solana mint address".to_string());
+    }
+    crate::core::wallets::solana_signing::parse_pubkey_32_bytes(&mint)?;
+
+    let chain = CHAINS
+        .iter()
+        .find(|c| c.key == "sol")
+        .ok_or_else(|| "Solana chain not found".to_string())?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| format!("Failed to create Solana RPC client: {e}"))?;
+    let mut last_error = "Failed to query Solana mint metadata".to_string();
+
+    for rpc in chain.rpcs {
+        verify_authenticated_network_access(&session_token)?;
+        let request = client
+            .post(*rpc)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getAccountInfo",
+                "params": [&mint, {"encoding": "jsonParsed", "commitment": "confirmed"}]
+            }))
+            .send();
+        let response = match tokio::time::timeout(std::time::Duration::from_secs(3), send_http_request_with_gate(request, &session_token)).await {
+            Ok(Ok(response)) => response,
+            _ => {
+                last_error = "RPC request could not be reached or timed out".to_string();
+                continue;
+            }
+        };
+        verify_authenticated_network_access(&session_token)?;
+        if !response.status().is_success() {
+            last_error = format!("RPC returned HTTP {}", response.status());
+            continue;
+        }
+        let body = match tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            read_http_text_limited(response, 256_000, &session_token),
+        ).await {
+            Ok(Ok(body)) => body,
+            _ => {
+                last_error = "RPC returned invalid or oversized JSON".to_string();
+                continue;
+            }
+        };
+        verify_authenticated_network_access(&session_token)?;
+        let Ok(data) = serde_json::from_str::<serde_json::Value>(&body) else {
+            last_error = "RPC returned invalid JSON".to_string();
+            continue;
+        };
+        if let Some(error) = data.get("error") {
+            last_error = format!("Solana RPC error: {error}");
+            continue;
+        }
+        let Some(account) = data.pointer("/result/value").filter(|value| !value.is_null()) else {
+            last_error = "Mint account does not exist".to_string();
+            continue;
+        };
+        let Some(owner) = account.get("owner").and_then(serde_json::Value::as_str) else {
+            last_error = "Mint account has no token-program owner".to_string();
+            continue;
+        };
+        if owner != crate::core::wallets::solana_signing::TOKEN_PROGRAM_ID_STR
+            && owner != crate::core::wallets::solana_signing::TOKEN_2022_PROGRAM_ID_STR
+        {
+            return Err("Address is not owned by the SPL Token or Token-2022 program".to_string());
+        }
+        let parsed_type = account.pointer("/data/parsed/type").and_then(serde_json::Value::as_str);
+        if parsed_type != Some("mint") {
+            return Err("Solana account is not a parsed token mint".to_string());
+        }
+        let decimals = account
+            .pointer("/data/parsed/info/decimals")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| u8::try_from(value).ok())
+            .ok_or_else(|| "Token mint returned invalid decimals".to_string())?;
+        verify_authenticated_network_access(&session_token)?;
+        return Ok(SolanaMintInfo {
+            decimals,
+            token_program_id: owner.to_string(),
+        });
+    }
+
+    Err(last_error)
+}
+
+#[tauri::command]
+pub async fn get_solana_address_lookup_table(
+    session_token: String,
+    address: String,
+) -> Result<String, String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
+    verify_air_gap_inactive()?;
+    let address = address.trim().to_string();
+    if address.len() > 44 {
+        return Err("Invalid address lookup table key".to_string());
+    }
+    crate::core::wallets::solana_signing::parse_pubkey_32_bytes(&address)?;
+
+    const ADDRESS_LOOKUP_TABLE_PROGRAM_ID: &str = "AddressLookupTab1e1111111111111111111111111";
+    let chain = CHAINS
+        .iter()
+        .find(|c| c.key == "sol")
+        .ok_or_else(|| "Solana chain not found".to_string())?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| format!("Failed to create Solana RPC client: {e}"))?;
+    let mut last_error = "Failed to load Solana address lookup table".to_string();
+
+    for rpc in chain.rpcs {
+        verify_authenticated_network_access(&session_token)?;
+        let request = client
+            .post(*rpc)
+            .json(&serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "getAccountInfo",
+                "params": [&address, {"encoding": "base64", "commitment": "confirmed"}]
+            }))
+            .send();
+        let response = match tokio::time::timeout(std::time::Duration::from_secs(3), send_http_request_with_gate(request, &session_token)).await {
+            Ok(Ok(response)) => response,
+            _ => {
+                last_error = "RPC request could not be reached or timed out".to_string();
+                continue;
+            }
+        };
+        verify_authenticated_network_access(&session_token)?;
+        if !response.status().is_success() {
+            last_error = format!("RPC returned HTTP {}", response.status());
+            continue;
+        }
+        let body = match tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            read_http_text_limited(response, 256_000, &session_token),
+        ).await {
+            Ok(Ok(body)) => body,
+            _ => {
+                last_error = "RPC returned invalid or oversized JSON".to_string();
+                continue;
+            }
+        };
+        verify_authenticated_network_access(&session_token)?;
+        let Ok(data) = serde_json::from_str::<serde_json::Value>(&body) else {
+            last_error = "RPC returned invalid JSON".to_string();
+            continue;
+        };
+        if let Some(error) = data.get("error") {
+            last_error = format!("Solana RPC error: {error}");
+            continue;
+        }
+        let Some(account) = data.pointer("/result/value").filter(|value| !value.is_null()) else {
+            last_error = "Address lookup table account does not exist".to_string();
+            continue;
+        };
+        if account.get("owner").and_then(serde_json::Value::as_str)
+            != Some(ADDRESS_LOOKUP_TABLE_PROGRAM_ID)
+        {
+            return Err("Address is not owned by the Solana address lookup table program".to_string());
+        }
+        let encoded = account
+            .pointer("/data/0")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "Address lookup table RPC response has no base64 account data".to_string())?;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|e| format!("Invalid address lookup table account data: {e}"))?;
+        if decoded.len() < 56
+            || decoded.len() > 56 + 256 * 32
+            || (decoded.len() - 56) % 32 != 0
+        {
+            return Err("Address lookup table account data has an invalid size".to_string());
+        }
+        verify_authenticated_network_access(&session_token)?;
+        return Ok(encoded.to_string());
+    }
+
+    Err(last_error)
+}
+
+#[tauri::command]
+pub async fn get_solana_transaction_history(
+    session_token: String,
+    address: String,
+    before: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<SolanaTransactionSignature>, String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
+    verify_air_gap_inactive()?;
+
+    let address = address.trim().to_string();
+    if address.len() > 44 {
+        return Err("Invalid Solana address".to_string());
+    }
+    crate::core::wallets::solana_signing::parse_pubkey_32_bytes(&address)?;
+    let before = before
+        .map(|signature| signature.trim().to_string())
+        .filter(|signature| !signature.is_empty());
+    if let Some(signature) = &before {
+        if signature.len() > 100 {
+            return Err("Invalid Solana transaction signature cursor".to_string());
+        }
+        let decoded = bs58::decode(signature)
+            .into_vec()
+            .map_err(|_| "Invalid Solana transaction signature cursor".to_string())?;
+        if decoded.len() != 64 {
+            return Err("Invalid Solana transaction signature cursor".to_string());
+        }
+    }
+
+    let chain = CHAINS
+        .iter()
+        .find(|chain| chain.key == "sol")
+        .ok_or_else(|| "Solana chain not found".to_string())?;
+    crate::adapters::solana::client::get_solana_transaction_history(
+        chain.rpcs,
+        &address,
+        before.as_deref(),
+        limit.unwrap_or(20).clamp(1, 100),
+        || verify_authenticated_network_access(&session_token),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -355,27 +999,45 @@ pub struct OnTheFlyBalanceResult {
 
 #[tauri::command]
 pub async fn get_token_prices(
+    session_token: String,
     ids: Option<Vec<String>>,
 ) -> Result<crate::core::scanner::pricing::PriceReport, String> {
-    if AIR_GAPPED_MODE.load(Ordering::SeqCst) {
-        return Err("Air-Gapped Safe Mode is ACTIVE: Price feeds blocked.".to_string());
-    }
-    crate::adapters::pricing::coingecko::get_cached_or_fetch_prices(ids).await
+    verify_authenticated_network_access(&session_token)?;
+    let network_gate = authenticated_network_gate(&session_token);
+    let report = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        crate::adapters::pricing::coingecko::get_cached_or_fetch_prices_with_gate(
+            ids,
+            network_gate.as_ref(),
+        ),
+    )
+    .await
+    .map_err(|_| "Token price request timed out".to_string())??;
+    verify_authenticated_network_access(&session_token)?;
+    Ok(report)
 }
 
 #[tauri::command]
-pub async fn scan_phrase_on_the_fly(phrase: String) -> Result<OnTheFlyBalanceResult, String> {
-    if AIR_GAPPED_MODE.load(Ordering::SeqCst) {
-        return Err("Air-Gapped Safe Mode is ACTIVE: Outbound network blocked.".to_string());
-    }
+pub async fn scan_phrase_on_the_fly(
+    session_token: String,
+    phrase: String,
+) -> Result<OnTheFlyBalanceResult, String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
+    verify_air_gap_inactive()?;
 
     let creds = crate::core::wallets::derivation::derive_public_addresses_only_native(&phrase)?;
     let client = crate::adapters::evm::client::shared_client();
+    let network_gate = authenticated_network_gate(&session_token);
 
     // Fetch dynamic live/cached prices with fallback
-    let price_report = crate::adapters::pricing::coingecko::get_cached_or_fetch_prices(None)
+    let price_report = crate::adapters::pricing::coingecko::get_cached_or_fetch_prices_with_gate(
+        None,
+        network_gate.as_ref(),
+    )
         .await
         .unwrap_or_else(|_| crate::core::scanner::pricing::PriceReport::baseline_fallback());
+    crate::db::commands::verify_session_authenticated(&session_token)?;
+    verify_air_gap_inactive()?;
     let btc_price = price_report.get_usd_price_or_baseline("btc");
     let eth_price = price_report.get_usd_price_or_baseline("eth");
     let bnb_price = price_report.get_usd_price_or_baseline("bnb");
@@ -387,9 +1049,12 @@ pub async fn scan_phrase_on_the_fly(phrase: String) -> Result<OnTheFlyBalanceRes
     // 1. Scan Bitcoin if address present
     let mut btc_balance_str: Option<String> = None;
     if let Some(ref btc_addr) = creds.btc_address {
+        network_gate.as_ref()?;
         let btc_rpcs = &["https://mempool.space/api", "https://blockstream.info/api"];
         if let Ok(res) =
-            crate::core::scanner::bitcoin::scan_bitcoin_for_wallet(&client, btc_addr, btc_rpcs, 0)
+            crate::core::scanner::bitcoin::scan_bitcoin_for_wallet_with_gate(
+                &client, btc_addr, btc_rpcs, 0, &network_gate,
+            )
                 .await
         {
             if res.has_funds {
@@ -407,8 +1072,15 @@ pub async fn scan_phrase_on_the_fly(phrase: String) -> Result<OnTheFlyBalanceRes
     if let Some(ref evm_addr) = creds.evm_address {
         for chain in CHAINS.iter().filter(|c| c.kind == ChainKind::Evm) {
             for rpc in chain.rpcs.iter().take(2) {
+                crate::db::commands::verify_session_authenticated(&session_token)?;
+                verify_air_gap_inactive()?;
                 if let Ok(hex_bal) =
-                    crate::adapters::evm::client::rpc_get_balance(evm_addr, rpc).await
+                    crate::adapters::evm::client::rpc_get_balance_with_gate(
+                        evm_addr,
+                        rpc,
+                        network_gate.as_ref(),
+                    )
+                    .await
                 {
                     let (amt, display) = crate::adapters::evm::client::format_balance_display(
                         &hex_bal,
@@ -436,8 +1108,15 @@ pub async fn scan_phrase_on_the_fly(phrase: String) -> Result<OnTheFlyBalanceRes
         let sol_chain = CHAINS.iter().find(|c| c.key == "sol");
         if let Some(chain) = sol_chain {
             for rpc in chain.rpcs.iter().take(2) {
+                crate::db::commands::verify_session_authenticated(&session_token)?;
+                verify_air_gap_inactive()?;
                 if let Ok(lamports_str) =
-                    crate::adapters::solana::client::rpc_get_sol_balance(sol_addr, rpc).await
+                    crate::adapters::solana::client::rpc_get_sol_balance_with_gate(
+                        sol_addr,
+                        rpc,
+                        network_gate.as_ref(),
+                    )
+                    .await
                 {
                     let lamports: u64 = lamports_str.parse().unwrap_or(0);
                     let (amt, display) =
@@ -453,6 +1132,7 @@ pub async fn scan_phrase_on_the_fly(phrase: String) -> Result<OnTheFlyBalanceRes
         }
     }
 
+    verify_authenticated_network_access(&session_token)?;
     Ok(OnTheFlyBalanceResult {
         phrase,
         btc_address: creds.btc_address,
@@ -559,7 +1239,7 @@ pub struct SolanaTokenSweepPayload {
     pub mint: String,
     #[serde(deserialize_with = "deserialize_u64_from_number_or_str")]
     pub amount_raw: u64,
-    pub decimals: u8,
+    pub decimals: Option<u8>,
     pub token_program: Option<String>,
     pub recent_blockhash: String,
     pub fee_payer_wallet_id: Option<i64>,
@@ -824,8 +1504,22 @@ pub async fn sign_evm_transfer_scoped(
     app: tauri::AppHandle,
     wallet_id: i64,
     session_token: String,
+    chain_key: String,
     tx: EvmTransferPayload,
 ) -> Result<EvmSignResult, String> {
+    let chain = CHAINS
+        .iter()
+        .find(|chain| chain.key == chain_key && chain.kind == ChainKind::Evm)
+        .ok_or_else(|| format!("Unsupported EVM chain: {chain_key}"))?;
+    let expected_chain_id = evm_chain_id(chain.key)
+        .ok_or_else(|| format!("Unsupported EVM chain: {chain_key}"))?;
+    if tx.chain_id != expected_chain_id {
+        return Err(format!(
+            "Transaction chain ID {} does not match {chain_key} chain ID {expected_chain_id}",
+            tx.chain_id
+        ));
+    }
+
     let mut master_key = crate::core::security::session::get_session_manager()
         .get_master_key(&session_token)?;
     let (encrypted_secret, wallet_type) = get_wallet_secret_and_type(&app, wallet_id)?;
@@ -923,47 +1617,17 @@ pub async fn sign_solana_token_sweep_scoped(
 
     crate::core::security::memory::secure_zero_string(&mut master_key);
 
-    let mut decimals = tx.decimals;
-    let mut token_prog = tx.token_program;
-
-    if tx.mint == "BoBBYtpE2kpAJwh5TPPky72KND2cWmtdYa63bqo2yiKs" {
-        if decimals == 0 || decimals == 6 {
-            decimals = 9;
-        }
-        if token_prog.is_none() {
-            token_prog = Some("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb".to_string());
-        }
-    } else if decimals == 0 || token_prog.is_none() {
-        let client = crate::adapters::evm::client::shared_client();
-        let rpcs = [
-            "https://mainnet.helius-rpc.com/?api-key=f0adee34-1df4-45c6-b897-b93f4cad01c9",
-            "https://api.mainnet-beta.solana.com",
-        ];
-        for rpc in rpcs {
-            let payload = serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "getAccountInfo",
-                "params": [&tx.mint, {"encoding": "jsonParsed"}]
-            });
-            if let Ok(resp) = client.post(rpc).json(&payload).send().await {
-                if let Ok(data) = resp.json::<serde_json::Value>().await {
-                    if let Some(val) = data.get("result").and_then(|r| r.get("value")) {
-                        if token_prog.is_none() {
-                            if let Some(owner) = val.get("owner").and_then(|o| o.as_str()) {
-                                token_prog = Some(owner.to_string());
-                            }
-                        }
-                        if decimals == 0 {
-                            if let Some(dec) = val.pointer("/data/parsed/info/decimals").and_then(|d| d.as_u64()) {
-                                decimals = dec as u8;
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-        }
+    let decimals = tx
+        .decimals
+        .ok_or_else(|| "Token decimals are missing; rescan the wallet or load mint metadata before sweeping".to_string())?;
+    let token_prog = tx
+        .token_program
+        .as_deref()
+        .ok_or_else(|| "Token program id is missing; load mint metadata before sweeping".to_string())?;
+    if token_prog != crate::core::wallets::solana_signing::TOKEN_PROGRAM_ID_STR
+        && token_prog != crate::core::wallets::solana_signing::TOKEN_2022_PROGRAM_ID_STR
+    {
+        return Err("Unsupported token program id for SPL token sweep".to_string());
     }
 
     let params = crate::core::wallets::solana_signing::SolanaTokenSweepParams {
@@ -971,7 +1635,7 @@ pub async fn sign_solana_token_sweep_scoped(
         mint: &tx.mint,
         amount_raw: tx.amount_raw,
         decimals,
-        token_program: token_prog.as_deref(),
+        token_program: Some(token_prog),
         recent_blockhash: &tx.recent_blockhash,
     };
 
@@ -998,6 +1662,16 @@ pub async fn sign_solana_versioned_tx_scoped(
     session_token: String,
     tx: SolanaVersionedTxPayload,
 ) -> Result<crate::core::wallets::solana_signing::SolanaSignResult, String> {
+    if tx.message_base64.len() > 1_644 {
+        return Err("Solana transaction message is too large".to_string());
+    }
+    let message_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&tx.message_base64)
+        .map_err(|e| format!("Invalid base64 message bytes: {}", e))?;
+    if message_bytes.len() > 1_232 {
+        return Err("Solana transaction message exceeds the packet-size limit".to_string());
+    }
+
     let mut master_key = crate::core::security::session::get_session_manager()
         .get_master_key(&session_token)?;
 
@@ -1020,10 +1694,6 @@ pub async fn sign_solana_versioned_tx_scoped(
 
     crate::core::security::memory::secure_zero_string(&mut master_key);
 
-    let message_bytes = base64::engine::general_purpose::STANDARD
-        .decode(&tx.message_base64)
-        .map_err(|e| format!("Invalid base64 message bytes: {}", e))?;
-
     crate::core::wallets::solana_signing::sign_solana_versioned_message_with_secrets(
         &fee_payer_secret,
         &fee_payer_type,
@@ -1033,19 +1703,153 @@ pub async fn sign_solana_versioned_tx_scoped(
     )
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SolanaTransactionConfirmation {
+    pub signature: String,
+    pub status: String,
+    pub error: Option<serde_json::Value>,
+}
+
+#[tauri::command]
+pub async fn confirm_solana_transaction(
+    session_token: String,
+    signature: String,
+) -> Result<SolanaTransactionConfirmation, String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
+    verify_air_gap_inactive()?;
+    let signature = signature.trim().to_string();
+    if signature.len() > 100
+        || bs58::decode(&signature).into_vec().map(|bytes| bytes.len()).ok() != Some(64)
+    {
+        return Err("Invalid Solana transaction signature".to_string());
+    }
+
+    let chain = CHAINS
+        .iter()
+        .find(|c| c.key == "sol")
+        .ok_or_else(|| "Solana chain not found".to_string())?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(4))
+        .build()
+        .map_err(|e| format!("Failed to create Solana RPC client: {e}"))?;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(8);
+    let mut last_error: Option<serde_json::Value> = None;
+    let mut saw_processed = false;
+
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            break;
+        }
+        for rpc in chain.rpcs {
+            verify_authenticated_network_access(&session_token)?;
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let request = client
+                .post(*rpc)
+                .json(&serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "getSignatureStatuses",
+                    "params": [[signature], {"searchTransactionHistory": true}]
+                }))
+                .send();
+            let Ok(Ok(response)) = tokio::time::timeout(remaining, send_http_request_with_gate(request, &session_token)).await else {
+                continue;
+            };
+            if !response.status().is_success() {
+                continue;
+            }
+            let body_budget = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if body_budget.is_zero() {
+                break;
+            }
+            let Ok(Ok(body)) = tokio::time::timeout(
+                body_budget,
+                read_http_text_limited(response, 256_000, &session_token),
+            )
+            .await
+            else {
+                continue;
+            };
+            verify_authenticated_network_access(&session_token)?;
+            let Ok(data) = serde_json::from_str::<serde_json::Value>(&body) else {
+                continue;
+            };
+            let Some(status) = data.pointer("/result/value/0").filter(|value| !value.is_null()) else {
+                continue;
+            };
+            if let Some(error) = status.get("err").filter(|value| !value.is_null()) {
+                return Ok(SolanaTransactionConfirmation {
+                    signature,
+                    status: "failed".to_string(),
+                    error: Some(error.clone()),
+                });
+            }
+            let confirmation = status
+                .get("confirmationStatus")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            if confirmation == "finalized" {
+                return Ok(SolanaTransactionConfirmation {
+                    signature,
+                    status: "finalized".to_string(),
+                    error: None,
+                });
+            }
+            if confirmation == "confirmed" {
+                return Ok(SolanaTransactionConfirmation {
+                    signature,
+                    status: "confirmed".to_string(),
+                    error: None,
+                });
+            }
+            if confirmation == "processed" || status.get("confirmations").is_some() {
+                saw_processed = true;
+            }
+            if let Some(error) = data.get("error") {
+                last_error = Some(error.clone());
+            }
+        }
+        if tokio::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        }
+    }
+
+    Ok(SolanaTransactionConfirmation {
+        signature,
+        status: if saw_processed { "processed" } else { "pending" }.to_string(),
+        error: last_error,
+    })
+}
+
 #[tauri::command]
 pub async fn jupiter_get_quote(
+    session_token: String,
     input_mint: String,
     output_mint: String,
     amount_raw: String,
     slippage_bps: u32,
 ) -> Result<String, String> {
-    if AIR_GAPPED_MODE.load(Ordering::SeqCst) {
-        return Err("Air-Gapped Safe Mode is ACTIVE: Jupiter quote blocked.".to_string());
+    crate::db::commands::verify_session_authenticated(&session_token)?;
+    verify_air_gap_inactive()?;
+    crate::core::wallets::solana_signing::parse_pubkey_32_bytes(&input_mint)?;
+    crate::core::wallets::solana_signing::parse_pubkey_32_bytes(&output_mint)?;
+    let amount = amount_raw
+        .parse::<u64>()
+        .map_err(|_| "Jupiter quote amount must be an unsigned integer".to_string())?;
+    if amount == 0 {
+        return Err("Jupiter quote amount must be greater than zero".to_string());
+    }
+    if slippage_bps > 10_000 {
+        return Err("Slippage must not exceed 10000 basis points".to_string());
     }
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(12))
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .build()
         .map_err(|e| e.to_string())?;
@@ -1055,30 +1859,53 @@ pub async fn jupiter_get_quote(
         "https://api.jup.ag/swap/v1",
     ];
 
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(24);
     let mut last_err = String::from("Failed to connect to Jupiter quote API");
 
     for base in endpoints {
+        verify_authenticated_network_access(&session_token)?;
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
         let url = format!(
             "{}/quote?inputMint={}&outputMint={}&amount={}&slippageBps={}",
             base, input_mint, output_mint, amount_raw, slippage_bps
         );
-        match client.get(&url).send().await {
-            Ok(res) => {
-                let status = res.status();
-                if status.is_success() {
-                    match res.text().await {
-                        Ok(text) => return Ok(text),
-                        Err(e) => last_err = e.to_string(),
-                    }
-                } else {
-                    let body = res.text().await.unwrap_or_default();
-                    last_err = format!("Jupiter error ({}): {}", status, body);
-                }
+        let request = client.get(&url).send();
+        let response = match tokio::time::timeout(remaining, send_http_request_with_gate(request, &session_token)).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => {
+                last_err = error.to_string();
+                continue;
             }
-            Err(e) => {
-                last_err = e.to_string();
+            Err(_) => {
+                last_err = "Jupiter quote request timed out".to_string();
+                break;
             }
+        };
+        if !response.status().is_success() {
+            last_err = format!("Jupiter quote API returned HTTP {}", response.status());
+            continue;
         }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            last_err = "Jupiter quote request timed out".to_string();
+            break;
+        }
+        let body = match tokio::time::timeout(remaining, read_http_text_limited(response, 250_000, &session_token)).await {
+            Ok(Ok(body)) => body,
+            Ok(Err(error)) => {
+                last_err = error;
+                continue;
+            }
+            Err(_) => {
+                last_err = "Jupiter quote response timed out".to_string();
+                break;
+            }
+        };
+        verify_authenticated_network_access(&session_token)?;
+        return Ok(body);
     }
 
     Err(last_err)
@@ -1086,23 +1913,44 @@ pub async fn jupiter_get_quote(
 
 #[tauri::command]
 pub async fn jupiter_get_swap_instructions(
+    session_token: String,
     payload_json: String,
 ) -> Result<String, String> {
-    if AIR_GAPPED_MODE.load(Ordering::SeqCst) {
-        return Err("Air-Gapped Safe Mode is ACTIVE: Jupiter swap blocked.".to_string());
+    crate::db::commands::verify_session_authenticated(&session_token)?;
+    verify_air_gap_inactive()?;
+    if payload_json.len() > 1_000_000 {
+        return Err("Jupiter swap-instructions payload is too large".to_string());
     }
 
-    // Strip platformFee so Jupiter swap-instructions never fails with 'feeAccount is required'
-    let mut payload_val: serde_json::Value = serde_json::from_str(&payload_json).unwrap_or(serde_json::Value::Null);
-    if let Some(qr) = payload_val.get_mut("quoteResponse") {
-        if let Some(obj) = qr.as_object_mut() {
-            obj.remove("platformFee");
-        }
+    let mut payload_val: serde_json::Value = serde_json::from_str(&payload_json)
+        .map_err(|e| format!("Invalid Jupiter swap-instructions payload: {e}"))?;
+    let payload_obj = payload_val
+        .as_object_mut()
+        .ok_or_else(|| "Jupiter swap-instructions payload must be a JSON object".to_string())?;
+    for key in ["userPublicKey", "payer"] {
+        let value = payload_obj
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("Jupiter payload is missing {key}"))?;
+        crate::core::wallets::solana_signing::parse_pubkey_32_bytes(value)?;
     }
-    let sanitized_payload = if payload_val.is_null() { payload_json } else { payload_val.to_string() };
+    let quote = payload_obj
+        .get_mut("quoteResponse")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| "Jupiter payload is missing quoteResponse".to_string())?;
+    for key in ["inputMint", "outputMint"] {
+        let value = quote
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("Jupiter quote is missing {key}"))?;
+        crate::core::wallets::solana_signing::parse_pubkey_32_bytes(value)?;
+    }
+    quote.remove("platformFee");
+    let sanitized_payload = payload_val.to_string();
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
         .build()
         .map_err(|e| e.to_string())?;
@@ -1112,33 +1960,54 @@ pub async fn jupiter_get_swap_instructions(
         "https://api.jup.ag/swap/v1",
     ];
 
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
     let mut last_err = String::from("Failed to connect to Jupiter swap instructions API");
 
     for base in endpoints {
+        verify_authenticated_network_access(&session_token)?;
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
         let url = format!("{}/swap-instructions", base);
-        match client
+        let request = client
             .post(&url)
             .header("Content-Type", "application/json")
             .body(sanitized_payload.clone())
-            .send()
-            .await
-        {
-            Ok(res) => {
-                let status = res.status();
-                if status.is_success() {
-                    match res.text().await {
-                        Ok(text) => return Ok(text),
-                        Err(e) => last_err = e.to_string(),
-                    }
-                } else {
-                    let body = res.text().await.unwrap_or_default();
-                    last_err = format!("Jupiter error ({}): {}", status, body);
-                }
+            .send();
+        let response = match tokio::time::timeout(remaining, send_http_request_with_gate(request, &session_token)).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => {
+                last_err = error.to_string();
+                continue;
             }
-            Err(e) => {
-                last_err = e.to_string();
+            Err(_) => {
+                last_err = "Jupiter swap-instructions request timed out".to_string();
+                break;
             }
+        };
+        if !response.status().is_success() {
+            last_err = format!("Jupiter swap-instructions API returned HTTP {}", response.status());
+            continue;
         }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            last_err = "Jupiter swap-instructions request timed out".to_string();
+            break;
+        }
+        let body = match tokio::time::timeout(remaining, read_http_text_limited(response, 1_000_000, &session_token)).await {
+            Ok(Ok(body)) => body,
+            Ok(Err(error)) => {
+                last_err = error;
+                continue;
+            }
+            Err(_) => {
+                last_err = "Jupiter swap-instructions response timed out".to_string();
+                break;
+            }
+        };
+        verify_authenticated_network_access(&session_token)?;
+        return Ok(body);
     }
 
     Err(last_err)
@@ -1261,8 +2130,12 @@ pub struct UpdateProgressPayload {
 }
 
 #[tauri::command]
-pub async fn vault_updater_check(app: tauri::AppHandle) -> Result<Option<UpdateInfo>, String> {
-    verify_air_gap_inactive()?;
+pub async fn vault_updater_check(
+    app: tauri::AppHandle,
+    session_token: String,
+) -> Result<Option<UpdateInfo>, String> {
+    let network_gate = authenticated_network_gate(&session_token);
+    network_gate()?;
 
     use tauri_plugin_updater::UpdaterExt;
     let updater = app
@@ -1273,7 +2146,11 @@ pub async fn vault_updater_check(app: tauri::AppHandle) -> Result<Option<UpdateI
         .map_err(|e| format!("Failed to set pragma header: {e}"))?
         .build()
         .map_err(|e| format!("Failed to initialize updater: {e}"))?;
-    let update = updater.check().await.map_err(|e| format!("Failed to check for updates: {e}"))?;
+    let update = crate::adapters::network::await_with_gate(
+        async { updater.check().await.map_err(|error| format!("Failed to check for updates: {error}")) },
+        &network_gate,
+    )
+    .await?;
 
     Ok(update.map(|u| UpdateInfo {
         version: u.version,
@@ -1284,8 +2161,12 @@ pub async fn vault_updater_check(app: tauri::AppHandle) -> Result<Option<UpdateI
 }
 
 #[tauri::command]
-pub async fn vault_updater_download_and_install(app: tauri::AppHandle) -> Result<(), String> {
-    verify_air_gap_inactive()?;
+pub async fn vault_updater_download_and_install(
+    app: tauri::AppHandle,
+    session_token: String,
+) -> Result<(), String> {
+    let network_gate = authenticated_network_gate(&session_token);
+    network_gate()?;
 
     use tauri::Emitter;
     use tauri_plugin_updater::UpdaterExt;
@@ -1298,28 +2179,31 @@ pub async fn vault_updater_download_and_install(app: tauri::AppHandle) -> Result
         .map_err(|e| format!("Failed to set pragma header: {e}"))?
         .build()
         .map_err(|e| format!("Failed to initialize updater: {e}"))?;
-    let update = updater
-        .check()
-        .await
-        .map_err(|e| format!("Failed to check for updates: {e}"))?
-        .ok_or_else(|| "No update available to download and install.".to_string())?;
+    let update = crate::adapters::network::await_with_gate(
+        async { updater.check().await.map_err(|error| format!("Failed to check for updates: {error}")) },
+        &network_gate,
+    )
+    .await?
+    .ok_or_else(|| "No update available to download and install.".to_string())?;
 
     let app_handle = app.clone();
-    update
-        .download_and_install(
-            move |chunk_length, content_length| {
-                let _ = app_handle.emit(
-                    "updater-progress",
-                    UpdateProgressPayload {
-                        chunk_length,
-                        content_length,
-                    },
-                );
-            },
-            || {},
-        )
-        .await
-        .map_err(|e| format!("Failed to download and install update: {e}"))?;
+    let download = update.download_and_install(
+        move |chunk_length, content_length| {
+            let _ = app_handle.emit(
+                "updater-progress",
+                UpdateProgressPayload {
+                    chunk_length,
+                    content_length,
+                },
+            );
+        },
+        || {},
+    );
+    crate::adapters::network::await_with_gate(
+        async { download.await.map_err(|error| format!("Failed to download and install update: {error}")) },
+        &network_gate,
+    )
+    .await?;
 
     let _ = app.emit("updater-finished", ());
 
@@ -1332,57 +2216,175 @@ pub async fn vault_updater_download_and_install(app: tauri::AppHandle) -> Result
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct RpcPingResponse {
-    pub url: String,
     pub latency_ms: u64,
     pub status: String,
     pub block_height: Option<u64>,
 }
 
+fn is_disallowed_rpc_ip(address: std::net::IpAddr) -> bool {
+    match address {
+        std::net::IpAddr::V4(ip) => {
+            let [a, b, c, _] = ip.octets();
+            ip.is_private() || ip.is_loopback() || (a == 169 && b == 254) || ip.is_unspecified() ||
+                ip.is_multicast() || a == 0 || a >= 224 ||
+                (a == 100 && (64..=127).contains(&b)) ||
+                (a == 192 && (b == 0 || b == 2 || b == 168)) ||
+                (a == 198 && (b == 18 || b == 19 || b == 51)) ||
+                (a == 192 && b == 88 && c == 99) ||
+                (a == 203 && b == 0 && c == 113)
+        }
+        std::net::IpAddr::V6(ip) => {
+            let segments = ip.segments();
+            let is_teredo = segments[0] == 0x2001 && segments[1] == 0;
+            let is_documentation = segments[0] == 0x2001 && segments[1] == 0x0db8;
+            let is_6to4 = segments[0] == 0x2002;
+            let is_orchid = segments[0] == 0x2001
+                && matches!(segments[1] & 0xfff0, 0x0010 | 0x0020);
+            let is_well_known_nat64 = segments[0] == 0x0064 && segments[1] == 0xff9b;
+            let compatible_ipv4 = segments[..6].iter().all(|segment| *segment == 0)
+                .then(|| std::net::Ipv4Addr::new(
+                    (segments[6] >> 8) as u8,
+                    segments[6] as u8,
+                    (segments[7] >> 8) as u8,
+                    segments[7] as u8,
+                ));
+            let nat64_ipv4 = is_well_known_nat64.then(|| std::net::Ipv4Addr::new(
+                (segments[6] >> 8) as u8,
+                segments[6] as u8,
+                (segments[7] >> 8) as u8,
+                segments[7] as u8,
+            ));
+            let embedded_ipv4_disallowed = ip
+                .to_ipv4_mapped()
+                .or(compatible_ipv4)
+                .or(nat64_ipv4)
+                .map(|mapped| is_disallowed_rpc_ip(mapped.into()))
+                .unwrap_or(false);
+
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || (segments[0] & 0xe000) != 0x2000 // only global-unicast 2000::/3
+                || (segments[0] & 0xfe00) == 0xfc00
+                || (segments[0] & 0xffc0) == 0xfe80
+                || (segments[0] & 0xffc0) == 0xfec0
+                || is_teredo
+                || is_documentation
+                || is_6to4
+                || is_orchid
+                || is_well_known_nat64
+                || embedded_ipv4_disallowed
+        }
+    }
+}
+
 #[tauri::command]
-pub async fn ping_rpc_node(url: String, family: String) -> Result<RpcPingResponse, String> {
-    if AIR_GAPPED_MODE.load(Ordering::SeqCst) {
-        return Err("Air-Gapped Safe Mode is ACTIVE: Outbound network blocked.".to_string());
+pub async fn ping_rpc_node(
+    session_token: String,
+    url: String,
+    family: String,
+) -> Result<RpcPingResponse, String> {
+    let network_gate = authenticated_network_gate(&session_token);
+    network_gate()?;
+    if !matches!(family.as_str(), "bitcoin" | "solana" | "evm") {
+        return Err("Unsupported RPC family".to_string());
     }
 
-    let client = reqwest::Client::builder()
+    let parsed_url = reqwest::Url::parse(url.trim())
+        .map_err(|_| "Invalid RPC URL".to_string())?;
+    if parsed_url.scheme() != "https" || parsed_url.host_str().is_none() ||
+        !parsed_url.username().is_empty() || parsed_url.password().is_some() || parsed_url.fragment().is_some()
+    {
+        return Err("RPC endpoints must use HTTPS and cannot contain credentials or fragments".to_string());
+    }
+    let host = parsed_url.host_str().unwrap().trim_end_matches('.').to_ascii_lowercase();
+    if host == "localhost" || host.ends_with(".localhost") || host.ends_with(".local") ||
+        host.ends_with(".internal") || host.ends_with(".test")
+    {
+        return Err("Local or private RPC endpoints are not allowed".to_string());
+    }
+
+    let mut client_builder = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(6))
-        .build()
-        .map_err(|e| e.to_string())?;
+        .redirect(reqwest::redirect::Policy::none());
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        if is_disallowed_rpc_ip(ip) {
+            return Err("Local or non-public RPC IP addresses are not allowed".to_string());
+        }
+    } else {
+        let port = parsed_url.port_or_known_default().ok_or_else(|| "RPC URL has no port".to_string())?;
+        let resolved = crate::adapters::network::await_with_gate(
+            async {
+                let addresses = tokio::time::timeout(
+                    std::time::Duration::from_secs(3),
+                    tokio::net::lookup_host((host.as_str(), port)),
+                )
+                .await
+                .map_err(|_| "RPC hostname lookup timed out".to_string())?
+                .map_err(|error| format!("RPC hostname lookup failed: {error}"))?;
+                Ok(addresses.collect::<Vec<_>>())
+            },
+            &network_gate,
+        )
+        .await?;
+        let public_address = resolved
+            .into_iter()
+            .find(|address| !is_disallowed_rpc_ip(address.ip()))
+            .ok_or_else(|| "RPC hostname did not resolve to a public IP address".to_string())?;
+        // Pin the validated public resolution and disable redirects to prevent a
+        // custom endpoint from redirecting the native request to a local service.
+        client_builder = client_builder.resolve(&host, public_address);
+    }
+    network_gate()?;
+    let client = client_builder.build().map_err(|e| e.to_string())?;
 
     let start = std::time::Instant::now();
 
     if family == "bitcoin" {
-        let endpoint = format!("{}/blocks/tip/height", url.trim_end_matches('/'));
-        let res = client
+        let mut endpoint_url = parsed_url.clone();
+        let path = endpoint_url.path().trim_end_matches('/').to_string();
+        endpoint_url.set_path(&format!("{path}/blocks/tip/height"));
+        let endpoint = endpoint_url.to_string();
+        let request = client
             .get(&endpoint)
             .header("User-Agent", "Plurivex/1.0")
-            .send()
-            .await;
+            .send();
+        let res = crate::adapters::network::await_with_gate(
+            async { request.await.map_err(crate::adapters::network::redact_reqwest_error) },
+            &network_gate,
+        )
+        .await;
 
         let elapsed = start.elapsed().as_millis() as u64;
         match res {
             Ok(resp) => {
                 if resp.status().is_success() {
-                    let height = resp.text().await.ok().and_then(|t| t.trim().parse::<u64>().ok());
+                    let mut resp = resp;
+                    let bytes = crate::adapters::network::read_response_limited(
+                        &mut resp,
+                        16_384,
+                        &network_gate,
+                    )
+                    .await?;
+                    let height = String::from_utf8(bytes)
+                        .ok()
+                        .and_then(|text| text.trim().parse::<u64>().ok());
                     Ok(RpcPingResponse {
-                        url,
                         latency_ms: elapsed,
                         status: "online".to_string(),
                         block_height: height,
                     })
                 } else {
                     Ok(RpcPingResponse {
-                        url,
                         latency_ms: elapsed,
                         status: format!("HTTP {}", resp.status()),
                         block_height: None,
                     })
                 }
             }
-            Err(e) => Ok(RpcPingResponse {
-                url,
+            Err(_error) => Ok(RpcPingResponse {
                 latency_ms: elapsed,
-                status: format!("Error: {}", e),
+                status: "Connection failed".to_string(),
                 block_height: None,
             }),
         }
@@ -1394,39 +2396,49 @@ pub async fn ping_rpc_node(url: String, family: String) -> Result<RpcPingRespons
             "params": []
         });
 
-        let res = client
-            .post(&url)
+        let request = client
+            .post(&parsed_url)
             .header("Content-Type", "application/json")
             .header("User-Agent", "Plurivex/1.0")
             .json(&payload)
-            .send()
-            .await;
+            .send();
+        let res = crate::adapters::network::await_with_gate(
+            async { request.await.map_err(crate::adapters::network::redact_reqwest_error) },
+            &network_gate,
+        )
+        .await;
 
         let elapsed = start.elapsed().as_millis() as u64;
         match res {
             Ok(resp) => {
                 if resp.status().is_success() {
-                    let json: serde_json::Value = resp.json().await.unwrap_or_default();
+                    let mut resp = resp;
+                    let bytes = crate::adapters::network::read_response_limited(
+                        &mut resp,
+                        64_000,
+                        &network_gate,
+                    )
+                    .await?;
+                    let body = String::from_utf8(bytes)
+                        .map_err(|_| "RPC response is not valid UTF-8".to_string())?;
+                    let json: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
                     let slot = json.get("result").and_then(|v| v.as_u64());
                     Ok(RpcPingResponse {
-                        url,
                         latency_ms: elapsed,
                         status: "online".to_string(),
                         block_height: slot,
                     })
                 } else {
                     Ok(RpcPingResponse {
-                        url,
                         latency_ms: elapsed,
                         status: format!("HTTP {}", resp.status()),
                         block_height: None,
                     })
                 }
             }
-            Err(e) => Ok(RpcPingResponse {
-                url,
+            Err(_error) => Ok(RpcPingResponse {
                 latency_ms: elapsed,
-                status: format!("Error: {}", e),
+                status: "Connection failed".to_string(),
                 block_height: None,
             }),
         }
@@ -1439,43 +2451,53 @@ pub async fn ping_rpc_node(url: String, family: String) -> Result<RpcPingRespons
             "params": []
         });
 
-        let res = client
-            .post(&url)
+        let request = client
+            .post(&parsed_url)
             .header("Content-Type", "application/json")
             .header("User-Agent", "Mozilla/5.0")
             .json(&payload)
-            .send()
-            .await;
+            .send();
+        let res = crate::adapters::network::await_with_gate(
+            async { request.await.map_err(crate::adapters::network::redact_reqwest_error) },
+            &network_gate,
+        )
+        .await;
 
         let elapsed = start.elapsed().as_millis() as u64;
         match res {
             Ok(resp) => {
                 if resp.status().is_success() {
-                    let json: serde_json::Value = resp.json().await.unwrap_or_default();
+                    let mut resp = resp;
+                    let bytes = crate::adapters::network::read_response_limited(
+                        &mut resp,
+                        64_000,
+                        &network_gate,
+                    )
+                    .await?;
+                    let body = String::from_utf8(bytes)
+                        .map_err(|_| "RPC response is not valid UTF-8".to_string())?;
+                    let json: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
                     let hex_block = json.get("result").and_then(|v| v.as_str());
                     let block_num = hex_block.and_then(|h| {
                         let clean = h.trim_start_matches("0x");
                         u64::from_str_radix(clean, 16).ok()
                     });
                     Ok(RpcPingResponse {
-                        url,
                         latency_ms: elapsed,
                         status: "online".to_string(),
                         block_height: block_num,
                     })
                 } else {
                     Ok(RpcPingResponse {
-                        url,
                         latency_ms: elapsed,
                         status: format!("HTTP {}", resp.status()),
                         block_height: None,
                     })
                 }
             }
-            Err(e) => Ok(RpcPingResponse {
-                url,
+            Err(_error) => Ok(RpcPingResponse {
                 latency_ms: elapsed,
-                status: format!("Error: {}", e),
+                status: "Connection failed".to_string(),
                 block_height: None,
             }),
         }
@@ -1487,13 +2509,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_updater_air_gap_kernel_gate() {
+    fn custom_rpc_ip_filter_rejects_private_and_special_ranges() {
+        for address in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "100.64.0.1",
+            "192.88.99.1",
+            "::1",
+            "fc00::1",
+            "fe80::1",
+            "fec0::1",
+            "2001:db8::1",
+            "2002:c0a8:0101::1",
+            "64:ff9b::a00:1",
+            "::ffff:127.0.0.1",
+        ] {
+            let parsed = address.parse::<std::net::IpAddr>().unwrap();
+            assert!(is_disallowed_rpc_ip(parsed), "{address} must be blocked");
+        }
+
+        for address in ["1.1.1.1", "2606:4700:4700::1111"] {
+            let parsed = address.parse::<std::net::IpAddr>().unwrap();
+            assert!(!is_disallowed_rpc_ip(parsed), "{address} should be public");
+        }
+    }
+
+    #[test]
+    fn test_updater_safe_mode_gate() {
         set_air_gapped_mode(true).unwrap();
         let res = verify_air_gap_inactive();
         assert!(res.is_err());
         assert_eq!(
             res.unwrap_err(),
-            "Air-Gapped Safe Mode is ACTIVE: Outbound network blocked."
+            "Safe Mode is active: app-command network requests are disabled."
         );
 
         set_air_gapped_mode(false).unwrap();
@@ -1644,4 +2692,3 @@ mod tests {
         }
     }
 }
-
