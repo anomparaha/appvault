@@ -646,12 +646,6 @@ mod tests {
     #[test]
     fn test_robinhood_tokens_configuration() {
         assert!(!ROBINHOOD_TOKENS.is_empty(), "ROBINHOOD_TOKENS should not be empty");
-        let plur = ROBINHOOD_TOKENS.iter().find(|token| token.symbol == "$PLUR");
-        assert!(plur.is_some(), "$PLUR token should be defined in ROBINHOOD_TOKENS");
-        let plur_def = plur.unwrap();
-        assert_eq!(plur_def.contract, "0xf890d3fe2be22c6259bbe9f607692c7168556c93");
-        assert_eq!(plur_def.decimals, 18);
-        assert_eq!(plur_def.name, "Plurivex");
         assert!(ROBINHOOD_TOKENS.iter().any(|token| token.symbol == "WETH"));
     }
 

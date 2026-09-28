@@ -365,7 +365,7 @@ export function ActivityWorkspace({ onBack, onOpenSweeper }: ActivityWorkspacePr
                 onClick={onOpenSweeper}
                 style={{ marginTop: "14px", display: "inline-flex", alignItems: "center", gap: "6px" }}
               >
-                <IconZap size={13} /> Open Fund Sweeper
+                <IconZap size={13} /> Open Transfer &amp; Sweep
               </button>
             )}
           </div>

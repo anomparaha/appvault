@@ -122,9 +122,3 @@ commands.allow = [
 identifier = "allow-price-feed"
 description = "Allow fetching live multi-currency token prices from oracle feed"
 commands.allow = ["get_token_prices"]
-
-[[permission]]
-identifier = "allow-official-token-metadata"
-description = "Allow fetching official token metadata through a session- and Safe Mode-gated native RPC"
-commands.allow = ["get_official_token_metadata"]
-

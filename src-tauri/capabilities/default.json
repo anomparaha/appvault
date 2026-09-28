@@ -24,7 +24,6 @@
     "allow-robinhood-ws-config",
     "allow-recovery-session",
     "allow-price-feed",
-    "allow-official-token-metadata",
     "allow-jupiter-dex",
     "allow-updater-scoped",
     "process:allow-restart"

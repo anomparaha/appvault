@@ -22,7 +22,6 @@ macro_rules! app_commands {
             $crate::app::commands::broadcast_solana_tx,
             $crate::app::commands::get_solana_account_details,
             $crate::app::commands::get_solana_mint_info,
-            $crate::app::commands::get_official_token_metadata,
             $crate::app::commands::get_solana_address_lookup_table,
             $crate::app::commands::confirm_solana_transaction,
             $crate::app::commands::get_solana_transaction_history,

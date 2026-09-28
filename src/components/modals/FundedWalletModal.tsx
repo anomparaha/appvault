@@ -229,7 +229,7 @@ export function FundedWalletModal({
                     onClose();
                   }}
                 >
-                  ⚡ Open in Sweeper
+                  ⚡ Open Transfer &amp; Sweep
                 </button>
               )}
 

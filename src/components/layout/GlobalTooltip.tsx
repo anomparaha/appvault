@@ -35,7 +35,7 @@ export function GlobalTooltip() {
       if (!el) return;
 
       // Ignore buttons, action bars, and elements marked as no-tooltip
-      if (el.closest('.no-tooltip, .import-src-card, [data-no-tooltip], button, .btn, .actions, .token-actions-cluster')) {
+      if (el.closest('.no-tooltip, .import-src-card, [data-no-tooltip], button, .btn, .actions')) {
         el.removeAttribute('title');
         el.removeAttribute('data-tooltip');
         return;

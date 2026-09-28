@@ -5,7 +5,6 @@ import { ChainIcon } from "../../../icons/ChainIcon";
 import { TokenIcon } from "../../../icons/TokenIcon";
 import { IconCoin } from "../../../icons";
 import { BalanceCard } from "./BalanceCard";
-import { isOfficialTokenRecord } from "../../../services/officialTokenService";
 import { useApp } from "../../../context/AppContext";
 import { TokenValuationBadge } from "../../../services/tokenPriceService";
 import { TokenTradeHistoryPanel } from "../../analytics/TokenTradeHistoryPanel";
@@ -42,17 +41,10 @@ export function BalancePortfolioView({
     return map;
   }, [tradePositions, wallet.id]);
 
-  const sortedTokens = useMemo(() => {
-    const list = wallet.tokens ? [...wallet.tokens] : [];
-
-    return list.sort((a, b) => {
-      const aIsOfficial = isOfficialTokenRecord(a);
-      const bIsOfficial = isOfficialTokenRecord(b);
-      if (aIsOfficial && !bIsOfficial) return -1;
-      if (!aIsOfficial && bIsOfficial) return 1;
-      return 0;
-    });
-  }, [wallet.tokens]);
+  const sortedTokens = useMemo(
+    () => (wallet.tokens ? [...wallet.tokens] : []),
+    [wallet.tokens],
+  );
 
   return (
     <>
@@ -95,7 +87,6 @@ export function BalancePortfolioView({
           {sortedTokens.length > 0 ? (
             <div className="token-cards-grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 200px), 1fr))" }}>
               {sortedTokens.map((tok, idx) => {
-                const isOfficial = isOfficialTokenRecord(tok);
                 const tradePos = tradePositionsMap.get(
                   `${tok.chain.toLowerCase()}_${(tok.contractAddress || tok.symbol).toLowerCase()}`,
                 );
@@ -104,11 +95,6 @@ export function BalancePortfolioView({
                   <div
                     key={`${tok.chain}-${tok.symbol}-${idx}`}
                     className="token-card"
-                    style={isOfficial ? {
-                      border: "1px solid rgba(204, 255, 0, 0.38)",
-                      background: "linear-gradient(145deg, rgba(204, 255, 0, 0.06) 0%, var(--surface) 100%)",
-                      boxShadow: "0 2px 10px rgba(204, 255, 0, 0.10)",
-                    } : undefined}
                   >
                     <div className="token-card-top">
                       <span className="token-symbol" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -121,22 +107,6 @@ export function BalancePortfolioView({
                           size={16}
                         />
                         {tok.symbol}
-                        {isOfficial && (
-                          <span
-                            style={{
-                              fontSize: "8px",
-                              fontWeight: "800",
-                              background: "rgba(34, 197, 94, 0.2)",
-                              color: "#4ade80",
-                              border: "1px solid rgba(34, 197, 94, 0.4)",
-                              padding: "1px 4px",
-                              borderRadius: "3px",
-                              marginLeft: "3px",
-                            }}
-                          >
-                            VERIFIED ✓
-                          </span>
-                        )}
                       </span>
                       <span
                         className={`token-chain-badge chain-${tok.chain}`}
@@ -152,9 +122,7 @@ export function BalancePortfolioView({
                         <ChainIcon chain={tok.chain} size={14} />
                       </span>
                     </div>
-                    <div className="token-card-name">
-                      {isOfficial ? "Official Plurivex Ecosystem Token" : tok.name}
-                    </div>
+                    <div className="token-card-name">{tok.name}</div>
                     <div className="token-card-balance mono">{tok.balance}</div>
                     <TokenValuationBadge
                       token={tok}

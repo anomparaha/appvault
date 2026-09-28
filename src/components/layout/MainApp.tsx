@@ -2,8 +2,7 @@ import { useState, useMemo, useEffect } from "react";
 import { useApp } from "../../context/AppContext";
 import { Sidebar } from "./Sidebar";
 import { WalletDetail } from "../wallet/WalletDetail";
-import { SweeperWorkspace } from "../workspaces/SweeperWorkspace";
-import { DexBatchTrader } from "../trade/DexBatchTrader";
+import { TradingWorkspace, type TradingMode } from "../trade/TradingWorkspace";
 import { ExportModal } from "../modals/ExportModal";
 import { ResetAllWalletsModal } from "../modals/ResetAllWalletsModal";
 import { PortfolioDirectory } from "../workspaces/PortfolioDirectory";
@@ -21,7 +20,6 @@ import { AllowancesWorkspace } from "../workspaces/AllowancesWorkspace";
 import { RpcManagerWorkspace } from "../workspaces/RpcManagerWorkspace";
 import { ReceiveModal } from "../modals/ReceiveModal";
 import { SendModal } from "../modals/SendModal";
-import { useOfficialToken, isOfficialTokenRecord } from "../../services/officialTokenService";
 import { BalanceCard } from "../wallet/detail/BalanceCard";
 import { fetchLiveTokenPrice, TokenValuationBadge } from "../../services/tokenPriceService";
 import { WinRateSparkline } from "../analytics/WinRateSparkline";
@@ -30,6 +28,7 @@ import { getTradePositions, subscribeTradePositions, type TokenTradePosition } f
 
 export function MainApp() {
   const [activeNav, setActiveNav] = useState<string>("dashboard");
+  const [tradingMode, setTradingMode] = useState<TradingMode>("swap");
   const [isReceiveOpen, setIsReceiveOpen] = useState<boolean>(false);
   const [isSendOpen, setIsSendOpen] = useState<boolean>(false);
   const [isCollapsed, setIsCollapsed] = useState<boolean>(() => {
@@ -40,6 +39,11 @@ export function MainApp() {
   const handleOpenWalletsDrawer = () => {
     setIsWalletsDrawerOpen(true);
     setIsCollapsed(true);
+  };
+
+  const openTrading = (mode: TradingMode = "swap") => {
+    setTradingMode(mode);
+    setActiveNav("trading");
   };
 
   const handleToggleSidebar = (fnOrVal: boolean | ((prev: boolean) => boolean)) => {
@@ -87,11 +91,6 @@ export function MainApp() {
   } = useApp();
 
   const updater = useAppUpdater(isAirGapped, sessionToken);
-  const { token: officialToken, vaultHoldings: officialTokenVaultHoldings } = useOfficialToken(
-    wallets,
-    sessionToken,
-    isAirGapped,
-  );
 
   const selected = wallets.find((w) => w.id === selectedId) ?? null;
   const seedCount = wallets.filter((w) => w.type === "seed").length;
@@ -250,13 +249,7 @@ export function MainApp() {
     }
 
     const list = Array.from(tokenMap.values());
-    return list.sort((a, b) => {
-      const aIsOfficial = isOfficialTokenRecord(a);
-      const bIsOfficial = isOfficialTokenRecord(b);
-      if (aIsOfficial && !bIsOfficial) return -1;
-      if (!aIsOfficial && bIsOfficial) return 1;
-      return 0;
-    });
+    return list;
   }, [activeWallets]);
 
   const activeNativeBalances = useMemo(() => {
@@ -359,10 +352,9 @@ export function MainApp() {
       case "dashboard": return "Dashboard";
       case "wallets": return selected ? `Wallet #${selected.id}` : "Portfolio & Wallets";
       case "activity": return "Activity & Audit Log";
-      case "sweeper": return "Smart Sweeper";
+      case "trading": return "Trading";
       case "import": return "Import Wallet";
       case "repair": return "Mnemonic Typo Repair";
-      case "trader": return "DEX Batch Trader";
       case "allowance": return "Token Approvals & Allowances";
       case "rpc": return "RPC Manager";
       default: return "Vault";
@@ -541,16 +533,14 @@ export function MainApp() {
             {activeNav === "repair" ? (
               <RepairWorkspace
                 onBackToVault={() => setActiveNav("dashboard")}
-                onOpenInSweeper={() => setActiveNav("sweeper")}
+                onOpenInSweeper={() => openTrading("transfer")}
               />
-            ) : activeNav === "sweeper" ? (
-              <SweeperWorkspace onBack={() => setActiveNav("dashboard")} />
-            ) : activeNav === "trader" ? (
-              <DexBatchTrader />
+            ) : activeNav === "trading" ? (
+              <TradingWorkspace mode={tradingMode} onModeChange={setTradingMode} />
             ) : activeNav === "activity" ? (
               <ActivityWorkspace
                 onBack={() => setActiveNav("dashboard")}
-                onOpenSweeper={() => setActiveNav("sweeper")}
+                onOpenSweeper={() => openTrading("transfer")}
               />
             ) : activeNav === "import" ? (
               <ImportWorkspace
@@ -579,7 +569,7 @@ export function MainApp() {
               ) : (
                 <PortfolioDirectory
                   onOpenImport={() => setActiveNav("import")}
-                  onOpenSweeper={() => setActiveNav("sweeper")}
+                  onOpenSweeper={() => openTrading("transfer")}
                 />
               )
             ) : (
@@ -726,7 +716,7 @@ export function MainApp() {
                       <button
                         type="button"
                         className="btn primary"
-                        onClick={() => setActiveNav("sweeper")}
+                        onClick={() => openTrading("transfer")}
                       >
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/>
@@ -745,270 +735,6 @@ export function MainApp() {
                   />
                 </div>
 
-
-                {/* ── Official Ecosystem Token Showcase Card ── */}
-                <div className="token-showcase-card">
-                  <div style={{ display: "flex", alignItems: "center", gap: "16px", flexWrap: "wrap" }}>
-                    <div className="token-showcase-emblem">
-                      <img
-                        src={officialToken.logoUrl || "/plurivex-token-logo-128.png"}
-                        alt={officialToken.name}
-                        style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                        onError={(e) => {
-                          (e.currentTarget as HTMLImageElement).src = "/plurivex-token-logo-128.png";
-                        }}
-                      />
-                    </div>
-
-                    <div>
-                      {/* Row 1: Brand, Symbol & Badges */}
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                        <h4 style={{ margin: 0, fontSize: "15px", fontWeight: "750", letterSpacing: "-0.01em", color: "#FFFFFF" }}>
-                          {officialToken.name}
-                        </h4>
-
-                        <span
-                          style={{
-                            fontSize: "10.5px",
-                            fontWeight: "700",
-                            fontFamily: "var(--mono)",
-                            background: "rgba(255, 255, 255, 0.08)",
-                            color: "#E2E8F0",
-                            padding: "2px 7px",
-                            borderRadius: "5px",
-                            border: "1px solid rgba(255, 255, 255, 0.12)",
-                          }}
-                        >
-                          {officialToken.symbol}
-                        </span>
-
-                        <span
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: "4px",
-                            fontSize: "9.5px",
-                            fontWeight: "700",
-                            background: "rgba(34, 197, 94, 0.14)",
-                            color: "#4ade80",
-                            border: "1px solid rgba(34, 197, 94, 0.35)",
-                            padding: "2px 8px",
-                            borderRadius: "5px",
-                            letterSpacing: "0.03em",
-                          }}
-                        >
-                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="20 6 9 17 4 12" />
-                          </svg>
-                          OFFICIAL VERIFIED
-                        </span>
-
-                        <span
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: "5px",
-                            fontSize: "9.5px",
-                            fontFamily: "var(--mono)",
-                            background: "rgba(255, 255, 255, 0.04)",
-                            color: "var(--text-secondary)",
-                            border: "1px solid rgba(255, 255, 255, 0.08)",
-                            padding: "2px 7px",
-                            borderRadius: "5px",
-                          }}
-                        >
-                          <ChainIcon chain={officialToken.chain} size={11} />
-                          {officialToken.chainLabel} ({officialToken.standard})
-                        </span>
-                      </div>
-
-                      {/* Row 2: Contract Address Capsule & Interactive Micro-Chips */}
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "6px", flexWrap: "wrap" }}>
-                        <div
-                          style={{
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: "6px",
-                            background: "var(--surface-2)",
-                            border: "1px solid var(--border)",
-                            padding: "2px 8px",
-                            borderRadius: "6px",
-                          }}
-                        >
-                          <span style={{ fontSize: "10.5px", color: "var(--text-dim)" }}>
-                            Contract:
-                          </span>
-                          <span className="mono" style={{ fontSize: "11px", color: "var(--accent)", fontWeight: "600" }}>
-                            {officialToken.contractAddress}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              navigator.clipboard.writeText(officialToken.contractAddress);
-                              toast("Official token contract copied to clipboard", "success");
-                            }}
-                            style={{
-                              background: "none",
-                              border: "none",
-                              padding: "1px 4px",
-                              color: "var(--text-dim)",
-                              cursor: "pointer",
-                              fontSize: "10px",
-                              display: "inline-flex",
-                              alignItems: "center",
-                              gap: "3px",
-                            }}
-                          >
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-                              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                            </svg>
-                            Copy
-                          </button>
-                        </div>
-
-                        {officialToken.explorerUrl && (
-                          <a
-                            href={officialToken.explorerUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="token-chip-link"
-                          >
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-                              <polyline points="15 3 21 3 21 9" />
-                              <line x1="10" y1="14" x2="21" y2="3" />
-                            </svg>
-                            Explorer
-                          </a>
-                        )}
-
-                        {officialToken.websiteUrl && (
-                          <a
-                            href={officialToken.websiteUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="token-chip-link"
-                          >
-                            🌐 Website
-                          </a>
-                        )}
-
-                        {officialToken.twitterUrl && (
-                          <a
-                            href={officialToken.twitterUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="token-chip-link"
-                          >
-                            𝕏 Community
-                          </a>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Right Side: Sculpted Vault Reserve Widget */}
-                  <div className="token-vault-widget">
-                    <div style={{ textAlign: "right" }}>
-                      <div
-                        style={{
-                          fontSize: "9.5px",
-                          color: "var(--text-dim)",
-                          textTransform: "uppercase",
-                          letterSpacing: "0.06em",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "flex-end",
-                          gap: "5px",
-                          marginBottom: "2px",
-                        }}
-                      >
-                        <span
-                          style={{
-                            width: "5px",
-                            height: "5px",
-                            borderRadius: "50%",
-                            background: officialTokenVaultHoldings > 0 ? "#4ade80" : "rgba(255, 255, 255, 0.25)",
-                            boxShadow: officialTokenVaultHoldings > 0 ? "0 0 8px #4ade80" : "none",
-                          }}
-                        />
-                        Token Balance
-                      </div>
-                      <div
-                        className="mono"
-                        style={{
-                          fontSize: "16px",
-                          fontWeight: "700",
-                          letterSpacing: "-0.01em",
-                          color: officialTokenVaultHoldings > 0 ? "#4ade80" : "#FFFFFF",
-                          display: "flex",
-                          alignItems: "baseline",
-                          justifyContent: "flex-end",
-                          gap: "4px",
-                        }}
-                      >
-                        <span>
-                          {officialTokenVaultHoldings.toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 4,
-                          })}
-                        </span>
-                        <span style={{ fontSize: "11px", color: "var(--text-dim)", fontWeight: "600" }}>
-                          {officialToken.symbol}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div style={{ width: "1px", height: "24px", background: "var(--border)" }} />
-
-                    <div className="token-actions-cluster">
-                      <button
-                        type="button"
-                        className="token-action-btn btn-token-receive"
-                        onClick={() => setIsReceiveOpen(true)}
-                      >
-                        <svg
-                          width="12"
-                          height="12"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2.4"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <line x1="12" y1="4" x2="12" y2="16" />
-                          <polyline points="18 10 12 16 6 10" />
-                          <line x1="5" y1="20" x2="19" y2="20" />
-                        </svg>
-                        Receive
-                      </button>
-
-                      <button
-                        type="button"
-                        className="token-action-btn btn-token-send"
-                        onClick={() => setIsSendOpen(true)}
-                      >
-                        <svg
-                          width="12"
-                          height="12"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2.4"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <line x1="12" y1="16" x2="12" y2="4" />
-                          <polyline points="6 10 12 4 18 10" />
-                          <line x1="5" y1="20" x2="19" y2="20" />
-                        </svg>
-                        Send
-                      </button>
-                    </div>
-                  </div>
-                </div>
 
                 {/* ── Conditional Dashboard Detail: Only display when wallet(s) are checked in sidebar ── */}
                 {!isFilteredByCheckbox ? (
@@ -1207,7 +933,6 @@ export function MainApp() {
                     {activeTokens.length > 0 ? (
                       <div className="token-cards-grid" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 200px), 1fr))" }}>
                         {activeTokens.map((tok, idx) => {
-                          const isOfficial = isOfficialTokenRecord(tok);
                           const tokenKey = tok.contractAddress
                             ? `${tok.chain.toLowerCase()}_${tok.contractAddress.toLowerCase()}`
                             : `${tok.chain.toLowerCase()}_${tok.symbol.toLowerCase()}`;
@@ -1217,16 +942,6 @@ export function MainApp() {
                             <div
                               key={`${tok.chain}-${tok.symbol}-${idx}`}
                               className="token-card"
-                              style={
-                                isOfficial
-                                  ? {
-                                      border: "1px solid rgba(204, 255, 0, 0.38)",
-                                      background:
-                                        "linear-gradient(145deg, rgba(204, 255, 0, 0.06) 0%, var(--surface) 100%)",
-                                      boxShadow: "0 2px 10px rgba(204, 255, 0, 0.10)",
-                                    }
-                                  : undefined
-                              }
                             >
                               <div className="token-card-top">
                                 <span className="token-symbol" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
@@ -1239,22 +954,7 @@ export function MainApp() {
                                     size={16}
                                   />
                                   {tok.symbol}
-                                  {isOfficial && (
-                                    <span
-                                      style={{
-                                        fontSize: "8px",
-                                        fontWeight: "800",
-                                        background: "rgba(34, 197, 94, 0.2)",
-                                        color: "#4ade80",
-                                        border: "1px solid rgba(34, 197, 94, 0.4)",
-                                        padding: "1px 4px",
-                                        borderRadius: "3px",
-                                        marginLeft: "3px",
-                                      }}
-                                    >
-                                      VERIFIED ✓
-                                    </span>
-                                  )}
+
                                 </span>
                                 <span
                                   className={`token-chain-badge chain-${tok.chain}`}
@@ -1270,9 +970,7 @@ export function MainApp() {
                                   <ChainIcon chain={tok.chain} size={14} />
                                 </span>
                               </div>
-                              <div className="token-card-name">
-                                {isOfficial ? "Official Plurivex Ecosystem Token" : tok.name}
-                              </div>
+                              <div className="token-card-name">{tok.name}</div>
                               <div className="token-card-balance mono">{tok.balance}</div>
                               <TokenValuationBadge
                                 token={tok}

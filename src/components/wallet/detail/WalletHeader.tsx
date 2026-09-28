@@ -1,8 +1,8 @@
-import { IconChartPie, IconZap, IconRefresh, IconHistory, IconScan, IconTrash } from "../../../icons";
+import { IconChartPie, IconRefresh, IconHistory, IconScan, IconTrash } from "../../../icons";
 import { useApp } from "../../../context/AppContext";
 import type { WalletType } from "../../../lib/types/index";
 
-export type DetailMode = "portfolio" | "sweeper" | "dex" | "explorer";
+export type DetailMode = "portfolio" | "trading" | "explorer";
 
 interface AllocationItem {
   chain: string;
@@ -67,17 +67,10 @@ export function WalletHeader({
         </button>
         <button
           type="button"
-          className={`workspace-tab ${activeTab === "sweeper" ? "active" : ""}`}
-          onClick={() => setActiveTab("sweeper")}
+          className={`workspace-tab ${activeTab === "trading" ? "active" : ""}`}
+          onClick={() => setActiveTab("trading")}
         >
-          <IconZap size={13} /> Batch Sweeper
-        </button>
-        <button
-          type="button"
-          className={`workspace-tab ${activeTab === "dex" ? "active" : ""}`}
-          onClick={() => setActiveTab("dex")}
-        >
-          <IconRefresh size={13} /> Quick DEX Swap
+          <IconRefresh size={13} /> Trading
         </button>
         <button
           type="button"

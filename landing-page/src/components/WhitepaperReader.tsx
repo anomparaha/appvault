@@ -48,7 +48,7 @@ const TOC_GROUPS = [
       { id: 'chapter-16', title: '16. Competitive Landscape', badge: 'spec' },
       { id: 'chapter-17', title: '17. Product Development Status', badge: 'spec' },
       { id: 'chapter-18', title: '18. Protocol Economics', badge: 'roadmap' },
-      { id: 'chapter-19', title: '19. $PLUR Utility', badge: 'roadmap' },
+      { id: 'chapter-19', title: '19. Future Token Utility (TBD)', badge: 'roadmap' },
       { id: 'chapter-20', title: '20. Core Stewardship & Governance', badge: 'spec' },
       { id: 'chapter-21', title: '21. Four-Phase Roadmap', badge: 'roadmap' },
     ]
@@ -616,7 +616,7 @@ export const WhitepaperReader: React.FC = () => {
 
                   {/* Formal Metadata Grid */}
                   <div className="wp-paper-meta-grid">
-                    <div className="wp-paper-meta-cell"><b>Document ID</b><span>PLUR-WP-2026.01</span></div>
+                    <div className="wp-paper-meta-cell"><b>Document ID</b><span>PLURIVEX-WP-2026.01</span></div>
                     <div className="wp-paper-meta-cell"><b>Classification</b><span>Execution Layer Infrastructure</span></div>
                     <div className="wp-paper-meta-cell"><b>Core Engine</b><span>Rust 2021 · Zero-Cloud Native</span></div>
                     <div className="wp-paper-meta-cell"><b>Verification</b><span>Formal Codebase Verification · 0 Vulns</span></div>
@@ -1283,7 +1283,7 @@ export const WhitepaperReader: React.FC = () => {
                           <td>Flashbots / RPC router integration</td>
                         </tr>
                         <tr>
-                          <td><b>Decentralized Relayer Network &amp; $PLUR Layer</b></td>
+                          <td><b>Decentralized Relayer Network &amp; Future Token Layer (TBD)</b></td>
                           <td><span className="wp-status-pill future">📅 FUTURE</span></td>
                           <td>Phase IV protocol expansion</td>
                         </tr>
@@ -1304,10 +1304,10 @@ export const WhitepaperReader: React.FC = () => {
                     <h2 className="wp-paper-chapter-title">18. Protocol Economics</h2>
                   </div>
                   <p>
-                    The $PLUR token is not presented as the reason Plurivex exists; the infrastructure comes first. Plurivex operates under a self-sustaining economic loop where protocol utility supports decentralized network operations:
+                    Plurivex infrastructure comes first. No official token ticker, network, contract, or launch has been designated; any future protocol-level economic model remains exploratory and subject to separate product, legal, and security review:
                   </p>
                   <div className="wp-paper-code-box">
-                    Protocol Usage ──▶️ Execution Activity ──▶️ Network Utility ──▶️ Plurivex Economic Layer ──▶️ $PLUR
+                    Protocol Usage ──▶️ Execution Activity ──▶️ Network Utility ──▶️ Potential Protocol Economics (TBD)
                   </div>
                   <p>
                     Local desktop operations (air-gapped key management, forensic mnemonic recovery, and local wallet indexing) remain 100% free, private, and sovereign. Protocol-level economics apply strictly to decentralized execution orchestration, multi-chain route hedging, and shared smart contract infrastructure.
@@ -1320,18 +1320,18 @@ export const WhitepaperReader: React.FC = () => {
                     <div className="wp-paper-chapter-eyebrow">
                       <span className="wp-status-pill roadmap">⏳ ROADMAP · Technical Utility</span>
                     </div>
-                    <h2 className="wp-paper-chapter-title">19. $PLUR Utility</h2>
+                    <h2 className="wp-paper-chapter-title">19. Future Token Utility (TBD)</h2>
                   </div>
                   <p>
-                    The $PLUR token provides tangible technical utility tied directly to execution lifecycle activity:
+                    No official protocol token, ticker, contract, network, or launch has been designated. The following concepts are unapproved and remain subject to product, legal, and security review:
                   </p>
                   <ul style={{ paddingLeft: '20px', color: '#334155', fontSize: '13.5px', lineHeight: 1.75 }}>
-                    <li><b>Execution Fee Subsidies:</b> Token holders receive tiered fee reductions on high-volume batch routing and multi-wallet sweeping operations.</li>
-                    <li><b>Priority MEV Relays:</b> Guaranteed access to high-throughput private mempools and block builder bundles during high network congestion.</li>
-                    <li><b>Execution Relayer Staking:</b> Required staking collateral for decentralized execution relayer nodes participating in the Phase IV network.</li>
+                    <li><b>Potential fee treatment:</b> Any future discounts or fees would require an approved economic design.</li>
+                    <li><b>Potential network access:</b> Access rules for private routing or relayers remain exploratory and unapproved.</li>
+                    <li><b>Potential relayer participation:</b> Incentives and collateral requirements have not been designed or approved.</li>
                   </ul>
                   <p>
-                    Mandate: Build the execution infrastructure first, connect the token second. Utility is activated strictly through verified software capability.
+                    Mandate: Build execution infrastructure first. Any future token concept remains TBD and must not be presented as live or official until explicitly approved and verified.
                   </p>
                 </section>
 
@@ -1387,8 +1387,8 @@ export const WhitepaperReader: React.FC = () => {
                     <div className="wp-roadmap-card">
                       <div className="wp-roadmap-card-bar future"></div>
                       <div className="wp-roadmap-card-body">
-                        <div className="wp-roadmap-card-title future">PHASE IV — EXECUTION NETWORK &amp; $PLUR</div>
-                        <div className="wp-roadmap-card-desc">Permissionless execution marketplace · Decentralized relayer network · $PLUR token launch &amp; core protocol expansion.</div>
+                        <div className="wp-roadmap-card-title future">PHASE IV — EXECUTION NETWORK &amp; FUTURE TOKEN DESIGN (TBD)</div>
+                        <div className="wp-roadmap-card-desc">Permissionless execution marketplace · Decentralized relayer network · Any token design or launch remains TBD and requires explicit approval.</div>
                       </div>
                     </div>
                   </div>
@@ -1600,7 +1600,7 @@ export const WhitepaperReader: React.FC = () => {
                           </tr>
                           <tr>
                             <td><b>Relayer &amp; Economy</b></td>
-                            <td>Decentralized Execution Relayers and $PLUR Layer</td>
+                            <td>Decentralized Execution Relayers and Future Token Design (TBD)</td>
                             <td><span className="wp-status-pill future">📅 FUTURE (Phases III–IV)</span></td>
                           </tr>
                         </tbody>

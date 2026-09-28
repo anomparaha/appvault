@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { IconProps } from "./types";
 import { ChainIcon } from "./ChainIcon";
-import { OFFICIAL_TOKEN_SPEC } from "../services/officialTokenService";
 import { useApp } from "../context/AppContext";
 import { verifyOnlineNetworkAccess } from "../lib/services/networkAccess";
 
@@ -78,10 +77,8 @@ function safeRemoteLogoUrl(value: string | null | undefined): string | null {
 
 /**
  * Universal Token Icon resolver.
- * Accurately displays token-specific brand assets:
- * 1. Plurivex Ecosystem Token ($PLUR) -> /plurivex-token-logo-128.png
- * 2. Bobby The Cat (BTc on Solana) -> /bobby-the-cat.png (NEVER Bitcoin orange logo!)
- * 3. Fallback: Host chain icon (Solana logo for SPL tokens, etc.)
+ * Uses approved chain-specific art where available, otherwise a session-gated
+ * token metadata logo or the host blockchain icon.
  */
 export function TokenIcon({
   chain = "",
@@ -180,22 +177,7 @@ export function TokenIcon({
   const normChain = (chain || "").trim().toLowerCase();
   const normAddr = (contractAddress || "").trim();
 
-  // 1. Plurivex Official Token ($PLUR). Never trust symbol/name metadata for branding.
-  if (
-    normChain === OFFICIAL_TOKEN_SPEC.chain &&
-    normAddr.toLowerCase() === OFFICIAL_TOKEN_SPEC.contractAddress.toLowerCase()
-  ) {
-    return (
-      <img
-        src={OFFICIAL_TOKEN_SPEC.logoUrl}
-        alt={OFFICIAL_TOKEN_SPEC.name}
-        style={{ width: size, height: size, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }}
-        className={className}
-      />
-    );
-  }
-
-  // 2. Bobby The Cat (BTc on Solana). Solana public keys are case-sensitive.
+  // 1. Bobby The Cat (BTc on Solana). Solana public keys are case-sensitive.
   if (
     normChain === "sol" &&
     normAddr === "BoBBYtpE2kpAJwh5TPPky72KND2cWmtdYa63bqo2yiKs"
@@ -210,7 +192,7 @@ export function TokenIcon({
     );
   }
 
-  // 3. Asteroid Shiba. Require its canonical Robinhood Chain contract address.
+  // 2. Asteroid Shiba. Require its canonical Robinhood Chain contract address.
   if (
     normChain === "robinhood" &&
     ["0x38aaf33082b20aff2e33433138de920f131b7777", "0x6e96e5d84513996ef7df308af345f9283c4da284"].includes(normAddr.toLowerCase())
@@ -225,7 +207,7 @@ export function TokenIcon({
     );
   }
 
-  // 4. Global Dollar / Robin. Symbols and names can be spoofed by arbitrary tokens.
+  // 3. Global Dollar / Robin. Symbols and names can be spoofed by arbitrary tokens.
   if (
     normChain === "robinhood" &&
     normAddr.toLowerCase() === "0x5fc5360d0400a0fd4f2af552add042d716f1d168"
@@ -240,7 +222,7 @@ export function TokenIcon({
     );
   }
 
-  // 5. OpenJEV. Require its canonical Robinhood Chain contract address.
+  // 4. OpenJEV. Require its canonical Robinhood Chain contract address.
   if (
     normChain === "robinhood" &&
     normAddr.toLowerCase() === "0x4d066ab4d924b7b3d01c6ecbfc142efe33aeb7fa"
@@ -255,7 +237,7 @@ export function TokenIcon({
     );
   }
 
-  // 6. Summa. Require its canonical Robinhood Chain contract address.
+  // 5. Summa. Require its canonical Robinhood Chain contract address.
   if (
     normChain === "robinhood" &&
     normAddr.toLowerCase() === "0x3bd9136d51af679bd1b11d06b951155543c5449f"
@@ -293,7 +275,7 @@ export function TokenIcon({
     );
   }
 
-  // 4. Fallback to host blockchain icon (Solana icon for SPL tokens, Robinhood feather for Robinhood tokens, etc.)
+  // Fallback to host blockchain icon (Solana icon for SPL tokens, Robinhood feather for Robinhood tokens, etc.)
   if (normChain) {
     return <ChainIcon chain={normChain} size={size} className={className} />;
   }

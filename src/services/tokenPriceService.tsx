@@ -55,7 +55,6 @@ export const TRUSTED_TOKEN_SYMBOLS_BY_CHAIN: Record<string, Record<string, strin
     "0xfc5a1a6eb0ba367c0e73da63a5cc324f9f4a2111": "GMX",
   },
   robinhood: {
-    "0xf890d3fe2be22c6259bbe9f607692c7168556c93": "$PLUR",
     "0x2411cfb697efc0efd32a4e98f7be5ba098b671a5": "PLX",
     "0x0bd7d308f8e1639fab988df18a8011f41eacad73": "WETH",
     "0x5fc5360d0400a0fd4f2af552add042d716f1d168": "USDG",

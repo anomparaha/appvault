@@ -1,5 +1,4 @@
 import React from 'react';
-import { ContractAddressBadge } from './ContractAddressBadge';
 
 interface HeroProps {
   onOpenWhitepaper: () => void;
@@ -41,8 +40,6 @@ export const Hero: React.FC<HeroProps> = ({ onOpenWhitepaper }) => {
           </button>
         </div>
 
-        {/* Official Contract Address Pill */}
-        <ContractAddressBadge variant="hero" />
       </div>
     </section>
   );

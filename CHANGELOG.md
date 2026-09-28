@@ -5,6 +5,11 @@ All notable changes to the Plurivex application will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- Removed the previous official-token contract, metadata, and landing-page badge designation. No replacement ticker, network, or contract is advertised; generic cross-chain token discovery and handling remain available.
+
 ## [0.1.7] - 2026-09-12
 
 ### 🛡️ Intelligent Address Inspector, Cross-Chain Contract Guard & UI Harmonization

@@ -83,8 +83,7 @@ const KNOWN_TOKENS: Record<string, KnownToken> = {
   "0x2859e4544c4bb03966803b044a93563bd2d0dd4d": { name: "Binance-Peg SHIBA INU", symbol: "SHIB", decimals: 18 },
   "0x6982508145454ce325ddbe47a25d4ec3d2311933": { name: "Pepe", symbol: "PEPE", decimals: 18 },
   "0x25d887ce7a35172c62febfd67a185662043f60e6": { name: "Pepe", symbol: "PEPE", decimals: 18 },
-  // Plurivex
-  "0xf890d3fe2be22c6259bbe9f607692c7168556c93": { name: "Plurivex", symbol: "$PLUR", decimals: 18 },
+  // Robinhood Chain
   "0x2411cfb697efc0efd32a4e98f7be5ba098b671a5": { name: "Plurivex", symbol: "PLX", decimals: 18 },
   // Robinhood
   "0x0bd7d308f8e1639fab988df18a8011f41eacad73": { name: "Wrapped Ether", symbol: "WETH", decimals: 18 },

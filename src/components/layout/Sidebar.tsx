@@ -59,6 +59,19 @@ export function Sidebar({
 
         <button
           type="button"
+          className={`nav-itm ${activeNav === "trading" ? "active" : ""}`}
+          onClick={() => setActiveNav?.("trading")}
+          data-tooltip={isCollapsed ? "DEX swaps and wallet transfers" : undefined}
+          data-tooltip-pos="right"
+        >
+          <svg className="nic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/>
+          </svg>
+          <span>Trading</span>
+        </button>
+
+        <button
+          type="button"
           className={`nav-itm ${activeNav === "activity" ? "active" : ""}`}
           onClick={() => setActiveNav?.("activity")}
           data-tooltip={isCollapsed ? "Activity & Vault Logs" : undefined}
@@ -71,19 +84,6 @@ export function Sidebar({
         </button>
 
         <div className="nav-label">Operations</div>
-
-        <button
-          type="button"
-          className={`nav-itm ${activeNav === "sweeper" ? "active" : ""}`}
-          onClick={() => setActiveNav?.("sweeper")}
-          data-tooltip={isCollapsed ? "Smart Sweeper (Multi-Wallet Sweeper)" : undefined}
-          data-tooltip-pos="right"
-        >
-          <svg className="nic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/>
-          </svg>
-          <span>Smart Sweeper</span>
-        </button>
 
         <button
           type="button"
@@ -110,19 +110,6 @@ export function Sidebar({
           </svg>
           <span>Typo Repair</span>
           <span className="nav-badge" style={{ background: "var(--accent)", color: "#16191F" }}>PRO</span>
-        </button>
-
-        <button
-          type="button"
-          className={`nav-itm ${activeNav === "trader" ? "active" : ""}`}
-          onClick={() => setActiveNav?.("trader")}
-          data-tooltip={isCollapsed ? "DEX Batch Trader (Buy & Sell)" : undefined}
-          data-tooltip-pos="right"
-        >
-          <svg className="nic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/>
-          </svg>
-          <span>DEX Trader</span>
         </button>
 
         <div className="nav-label">Security &amp; Network</div>

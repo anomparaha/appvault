@@ -16,7 +16,7 @@ import { formatCompactBalance, hasFundsOnEvm, hasFundsOnSol } from "../../lib/ch
 import { shortAddr } from "../../lib/wallets/wallet";
 import { formatEther, isEvmAddress, isValidSolAddress } from "../../lib/utils/format";
 import type { WalletView } from "../../lib/types/index";
-import { ChainIcon, TokenIcon, IconAlertTriangle, IconArrowLeft, IconCheckCircle, IconZap } from "../../icons";
+import { ChainIcon, TokenIcon, IconAlertTriangle, IconArrowLeft, IconCheckCircle } from "../../icons";
 
 interface DiscoveredSolToken {
   mint: string;
@@ -52,7 +52,13 @@ function formatRawTokenAmount(rawAmount: bigint, decimals: number): string {
   return fraction ? `${whole.toString()}.${fraction}` : whole.toString();
 }
 
-export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
+interface SweeperWorkspaceProps {
+  wallet?: WalletView;
+  active?: boolean;
+  onBusyChange?: (busy: boolean) => void;
+}
+
+export function SweeperWorkspace({ wallet, active = true, onBusyChange }: SweeperWorkspaceProps) {
   const {
     wallets,
     selectedSweepIds,
@@ -72,7 +78,7 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
   isAirGappedRef.current = isAirGapped;
   networkSessionReadyRef.current = networkSessionReady;
 
-  const [chainKey, setChainKey] = useState("eth");
+  const [chainKey, setChainKey] = useState("sol");
   const [assetMode, setAssetMode] = useState<"native" | "token">("native");
   const [selectedTokenMint, setSelectedTokenMint] = useState("");
   const [customMintInput, setCustomMintInput] = useState("");
@@ -89,30 +95,39 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
   const [sweepProgress, setSweepProgress] = useState<{ current: number; total: number } | null>(null);
   const [txResults, setTxResults] = useState<Record<number, SweepTxResult>>({});
 
+  useEffect(() => {
+    onBusyChange?.(sweeping);
+  }, [sweeping, onBusyChange]);
+
   const activeChain = SWEEP_CHAINS[chainKey] ?? SWEEP_CHAINS.eth;
   const isEvmChain = chainKey !== "sol";
   const isTokenTransfer = chainKey === "sol" && assetMode === "token";
 
   const targetWallets = useMemo(() => {
+    if (wallet) return getWalletTargetAddress(wallet, isEvmChain) ? [wallet] : [];
     if (selectedSweepIds.size === 0) return [];
-    return wallets.filter((wallet) =>
-      selectedSweepIds.has(wallet.id) && Boolean(getWalletTargetAddress(wallet, isEvmChain)),
+    return wallets.filter((candidate) =>
+      selectedSweepIds.has(candidate.id) && Boolean(getWalletTargetAddress(candidate, isEvmChain)),
     );
-  }, [wallets, selectedSweepIds, isEvmChain]);
+  }, [wallet, wallets, selectedSweepIds, isEvmChain]);
 
-  const activeFamilyFundedCount = useMemo(
-    () => wallets.filter((wallet) =>
-      isEvmChain
+  const activeFamilyFundedCount = useMemo(() => {
+    if (wallet) {
+      return Number(isEvmChain
         ? hasFundsOnEvm(wallet.balances, wallet.tokens)
-        : hasFundsOnSol(wallet.balances, wallet.tokens),
-    ).length,
-    [wallets, isEvmChain],
-  );
+        : hasFundsOnSol(wallet.balances, wallet.tokens));
+    }
+    return wallets.filter((candidate) =>
+      isEvmChain
+        ? hasFundsOnEvm(candidate.balances, candidate.tokens)
+        : hasFundsOnSol(candidate.balances, candidate.tokens),
+    ).length;
+  }, [wallet, wallets, isEvmChain]);
 
   const discoveredSolTokens = useMemo<DiscoveredSolToken[]>(() => {
     const tokenMap = new Map<string, DiscoveredSolToken>();
-    for (const wallet of wallets) {
-      for (const token of wallet.tokens ?? []) {
+    for (const sourceWallet of (wallet ? [wallet] : wallets)) {
+      for (const token of sourceWallet.tokens ?? []) {
         const mint = token.contractAddress;
         if (!mint || (token.chain?.toLowerCase() !== "sol" && token.chain?.toLowerCase() !== "solana")) continue;
         const existing = tokenMap.get(mint);
@@ -134,14 +149,14 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
       }
     }
     return Array.from(tokenMap.values()).sort((a, b) => b.walletCount - a.walletCount);
-  }, [wallets]);
+  }, [wallet, wallets]);
 
   const activeTokenMint = selectedTokenMint === "custom" ? customMintInput.trim() : selectedTokenMint;
   const activeToken = useMemo(() => {
     if (chainKey !== "sol" || assetMode !== "token" || !activeTokenMint || !isValidSolAddress(activeTokenMint)) return null;
     const discovered = discoveredSolTokens.find((token) => token.mint === activeTokenMint);
     if (discovered) return discovered;
-    const knownBalance = wallets.map((wallet) => getSolanaToken(wallet, activeTokenMint)).find(Boolean);
+    const knownBalance = (wallet ? [wallet] : wallets).map((sourceWallet) => getSolanaToken(sourceWallet, activeTokenMint)).find(Boolean);
     return {
       mint: activeTokenMint,
       symbol: knownBalance?.symbol || "TOKEN",
@@ -151,7 +166,7 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
       logoUrl: knownBalance?.logoUrl ?? null,
       walletCount: knownBalance ? 1 : 0,
     };
-  }, [chainKey, assetMode, activeTokenMint, discoveredSolTokens, wallets]);
+  }, [chainKey, assetMode, activeTokenMint, discoveredSolTokens, wallet, wallets]);
 
   const solFeePayers = useMemo(() => wallets
     .filter((wallet) => Boolean(wallet.solAddress))
@@ -190,43 +205,43 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
   }, [chainKey, isTokenTransfer, activeTokenMint, recipient, selectedSweepIds]);
 
   useEffect(() => {
-    if (!sessionToken || !networkSessionReady || isAirGapped || chainKey === "sol") {
+    if (!active || !sessionToken || !networkSessionReady || isAirGapped || chainKey === "sol") {
       setFeeDataLive(false);
       return;
     }
 
-    let active = true;
+    let requestIsCurrent = true;
     setFeeDataLive(false);
     void fetchLiveFeeData(sessionToken, chainKey)
       .then((data) => {
-        if (!active) return;
+        if (!requestIsCurrent) return;
         setLiveFeeGwei(data.gasPriceGwei);
         setFeeDataLive(true);
         const multiplier = gasMode === "fast" ? 1.25 : gasMode === "turbo" ? 2 : 1;
         if (gasMode !== "custom") setGasPriceGwei(data.gasPriceGwei * multiplier);
       })
       .catch((error) => {
-        if (active) setFeeDataLive(false);
+        if (requestIsCurrent) setFeeDataLive(false);
         console.warn("Failed to fetch sweep fee data:", error);
       });
-    return () => { active = false; };
-  }, [chainKey, sessionToken, networkSessionReady, isAirGapped, gasMode]);
+    return () => { requestIsCurrent = false; };
+  }, [active, chainKey, sessionToken, networkSessionReady, isAirGapped, gasMode]);
 
   useEffect(() => {
-    if (!sessionToken || !networkSessionReady || isAirGapped || targetWallets.length === 0 || (isTokenTransfer && !activeToken)) {
+    if (!active || !sessionToken || !networkSessionReady || isAirGapped || targetWallets.length === 0 || (isTokenTransfer && !activeToken)) {
       setEstimates({});
       setLoadingEstimates(false);
       return;
     }
 
-    let active = true;
+    let requestIsCurrent = true;
     setEstimates({});
     setLoadingEstimates(true);
 
     const loadEstimates = async () => {
       const next: Record<number, WalletSweepEstimate> = {};
       for (const wallet of targetWallets) {
-        if (!active) return;
+        if (!requestIsCurrent) return;
         const address = getWalletTargetAddress(wallet, isEvmChain);
         if (!address) continue;
 
@@ -258,10 +273,10 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
               chainKey === "sol" ? feePayerWalletId ?? undefined : undefined,
             );
 
-        if (!active) return;
+        if (!requestIsCurrent) return;
         next[wallet.id] = estimate;
       }
-      if (active) {
+      if (requestIsCurrent) {
         setEstimates(next);
         setLoadingEstimates(false);
       }
@@ -269,13 +284,13 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
 
     void loadEstimates().catch((error) => {
       console.error("Failed to estimate sweep balances:", error);
-      if (active) {
+      if (requestIsCurrent) {
         setEstimates({});
         setLoadingEstimates(false);
       }
     });
 
-    return () => { active = false; };
+    return () => { requestIsCurrent = false; };
   }, [
     sessionToken,
     networkSessionReady,
@@ -287,6 +302,7 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
     chainKey,
     gasPriceGwei,
     feePayerWalletId,
+    active,
   ]);
 
   const tokenDecimals = activeToken?.decimals ?? 0;
@@ -494,399 +510,353 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
     }
   };
 
+  const transferAssetSymbol = isTokenTransfer ? activeToken?.symbol || "SPL token" : activeChain.symbol;
+  const recipientSummary = recipient.trim() ? shortAddr(recipient.trim()) : "Not entered";
+  const feeSummary = isEvmChain
+    ? `${gasPriceGwei.toFixed(2)} Gwei · ${feeDataLive ? "live" : "estimate"}`
+    : selectedFeePayer
+      ? selectedFeePayer.label || `Wallet #${selectedFeePayer.id}`
+      : "Each source wallet";
+
   return (
-    <div className="sweeper-workspace-panel sweep-page">
-      <header className="sweep-page-header">
-        <div className="sweep-page-heading">
-          <div className="sweep-eyebrow"><IconZap size={13} /> MULTI-WALLET TRANSFER</div>
-          <div className="sweep-title-row">
-            <div>
-              <h2>Smart Sweeper</h2>
-              <p>Transfer native assets or Solana tokens to one recipient. DEX swaps live in DEX Trader.</p>
+    <div className="sweeper-workspace-panel sweep-page trading-operation trading-transfer" data-trading-active={active}>
+      <div className="trading-layout">
+        <div className="trading-stack">
+          <section className="trading-card">
+            <div className="trading-card-heading">
+              <div className="trading-card-heading-main">
+                <span className="trading-step">01</span>
+                <div>
+                  <h3>Network &amp; asset</h3>
+                  <p>Transfer native balances or discovered Solana tokens. No swap route is used.</p>
+                </div>
+              </div>
             </div>
-            {onBack && (
-              <button type="button" className="btn btn-ghost btn-sm" onClick={onBack}>
-                <IconArrowLeft size={13} /> Back
-              </button>
-            )}
-          </div>
-        </div>
-        <div className={`sweep-gate-banner ${isAirGapped || !sessionToken || !networkSessionReady ? "is-offline" : "is-online"}`}>
-          <span className="sweep-gate-dot" />
-          {isAirGapped ? "Safe Mode is on" : !sessionToken ? "Vault locked" : !networkSessionReady ? "Checking secure network access…" : "Vault session ready"}
-        </div>
-      </header>
 
-      <section className="sweep-card" aria-labelledby="sweep-network-title">
-        <div className="sweep-card-heading">
-          <span className="sweep-step-number">01</span>
-          <div>
-            <h3 id="sweep-network-title">Choose network</h3>
-            <p>Select the network that holds the assets you want to transfer.</p>
-          </div>
-        </div>
-        <div className="sweep-chain-grid">
-          {Object.values(SWEEP_CHAINS).map((chain) => (
-            <button
-              key={chain.key}
-              type="button"
-              className={`sweep-chain-option ${chainKey === chain.key ? "is-active" : ""}`}
-              onClick={() => {
-                setChainKey(chain.key);
-                setTxResults({});
-              }}
-              disabled={sweeping}
-              aria-pressed={chainKey === chain.key}
-            >
-              <ChainIcon chain={chain.key} size={20} />
-              <span className="sweep-chain-copy">
-                <strong>{chain.name}</strong>
-                <small>{chain.symbol} · {chain.key === "sol" ? "Solana" : "EVM"}</small>
-              </span>
-              <span className="sweep-chain-state">{chainKey === chain.key ? "Selected" : "Select"}</span>
-            </button>
-          ))}
-        </div>
-      </section>
-
-      <section className="sweep-card" aria-labelledby="sweep-setup-title">
-        <div className="sweep-card-heading">
-          <span className="sweep-step-number">02</span>
-          <div>
-            <h3 id="sweep-setup-title">Configure transfer</h3>
-            <p>Choose the asset and destination. Review fees before any transaction is sent.</p>
-          </div>
-        </div>
-
-        <div className="sweep-setup-grid">
-          <div className="sweep-field-card">
-            <label className="sweep-field-label">Asset</label>
-            {chainKey === "sol" ? (
-              <div className="sweep-segmented-control" role="group" aria-label="Asset type">
+            <div className="sweep-chain-grid">
+              {Object.values(SWEEP_CHAINS).map((chain) => (
                 <button
+                  key={chain.key}
                   type="button"
-                  className={assetMode === "native" ? "is-active" : ""}
-                  onClick={() => setAssetMode("native")}
+                  className={`sweep-chain-option ${chainKey === chain.key ? "is-active" : ""}`}
+                  onClick={() => {
+                    setChainKey(chain.key);
+                    setTxResults({});
+                  }}
                   disabled={sweeping}
-                  aria-pressed={assetMode === "native"}
+                  aria-pressed={chainKey === chain.key}
                 >
-                  Native SOL
+                  <ChainIcon chain={chain.key} size={19} />
+                  <span className="sweep-chain-copy">
+                    <strong>{chain.name}</strong>
+                    <small>{chain.key === "sol" ? "SOL + SPL transfers" : `Native ${chain.symbol}`}</small>
+                  </span>
+                  <span className="sweep-chain-state">{chainKey === chain.key ? "Selected" : ""}</span>
                 </button>
-                <button
-                  type="button"
-                  className={assetMode === "token" ? "is-active" : ""}
-                  onClick={() => setAssetMode("token")}
-                  disabled={sweeping}
-                  aria-pressed={assetMode === "token"}
-                >
-                  SPL token <span>{discoveredSolTokens.length}</span>
-                </button>
-              </div>
-            ) : (
-              <div className="sweep-asset-readonly">
-                <ChainIcon chain={chainKey} size={18} />
-                <span>Native {activeChain.symbol}</span>
-                <small>Token transfers are currently supported on Solana.</small>
-              </div>
-            )}
+              ))}
+            </div>
 
-            {isTokenTransfer && (
-              <div className="sweep-token-picker">
-                {activeToken && (
-                  <TokenIcon
-                    chain="sol"
-                    symbol={activeToken.symbol}
-                    contractAddress={activeToken.mint}
-                    name={activeToken.name}
-                    logoUrl={activeToken.logoUrl}
-                    size={24}
-                  />
+            <div className="sweep-setup-grid">
+              <div className="sweep-field-card">
+                <label className="sweep-field-label">Asset</label>
+                {chainKey === "sol" ? (
+                  <div className="sweep-segmented-control" role="group" aria-label="Asset type">
+                    <button
+                      type="button"
+                      className={assetMode === "native" ? "is-active" : ""}
+                      onClick={() => setAssetMode("native")}
+                      disabled={sweeping}
+                      aria-pressed={assetMode === "native"}
+                    >Native SOL</button>
+                    <button
+                      type="button"
+                      className={assetMode === "token" ? "is-active" : ""}
+                      onClick={() => setAssetMode("token")}
+                      disabled={sweeping}
+                      aria-pressed={assetMode === "token"}
+                    >SPL token <span>{discoveredSolTokens.length}</span></button>
+                  </div>
+                ) : (
+                  <div className="sweep-asset-readonly">
+                    <ChainIcon chain={chainKey} size={18} />
+                    <span>Native {activeChain.symbol}</span>
+                    <small>Solana SPL transfers are selected on the Solana network.</small>
+                  </div>
                 )}
-                <select
-                  aria-label="Solana token to transfer"
-                  value={selectedTokenMint}
-                  onChange={(event) => setSelectedTokenMint(event.target.value)}
-                  disabled={sweeping}
-                >
-                  <option value="" disabled>
-                    {discoveredSolTokens.length > 0 ? "Choose a discovered token" : "No discovered tokens"}
-                  </option>
-                  {discoveredSolTokens.map((token) => (
-                    <option key={token.mint} value={token.mint}>
-                      {token.symbol} · {token.name} · {token.walletCount} wallet{token.walletCount === 1 ? "" : "s"}
-                    </option>
-                  ))}
-                  <option value="custom">Enter a custom mint…</option>
-                </select>
-                {selectedTokenMint === "custom" && (
+
+                {isTokenTransfer && (
+                  <div className="sweep-token-picker">
+                    {activeToken && (
+                      <TokenIcon
+                        chain="sol"
+                        symbol={activeToken.symbol}
+                        contractAddress={activeToken.mint}
+                        name={activeToken.name}
+                        logoUrl={activeToken.logoUrl}
+                        size={23}
+                      />
+                    )}
+                    <select
+                      aria-label="Solana token to transfer"
+                      value={selectedTokenMint}
+                      onChange={(event) => setSelectedTokenMint(event.target.value)}
+                      disabled={sweeping}
+                    >
+                      <option value="" disabled>{discoveredSolTokens.length > 0 ? "Choose a discovered token" : "No discovered tokens"}</option>
+                      {discoveredSolTokens.map((token) => (
+                        <option key={token.mint} value={token.mint}>
+                          {token.symbol} · {token.name} · {token.walletCount} wallet{token.walletCount === 1 ? "" : "s"}
+                        </option>
+                      ))}
+                      <option value="custom">Enter a custom mint…</option>
+                    </select>
+                    {selectedTokenMint === "custom" && (
+                      <input
+                        className="sweep-text-input mono"
+                        value={customMintInput}
+                        onChange={(event) => setCustomMintInput(event.target.value.trim())}
+                        placeholder="Paste Solana token mint"
+                        autoComplete="off"
+                        spellCheck={false}
+                        disabled={sweeping}
+                        aria-label="Custom Solana token mint"
+                        aria-invalid={Boolean(customMintInput) && !isValidSolAddress(customMintInput)}
+                      />
+                    )}
+                    {!activeToken && (
+                      <span className="sweep-inline-hint">
+                        {selectedTokenMint === "custom"
+                          ? "Enter a valid Solana mint and confirm selected wallets have been scanned for it."
+                          : "Choose a discovered token or enter a custom mint."}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="sweep-field-card">
+                <label className="sweep-field-label" htmlFor="sweep-recipient">Recipient address</label>
+                <div className="sweep-recipient-wrap">
                   <input
+                    id="sweep-recipient"
                     className="sweep-text-input mono"
-                    value={customMintInput}
-                    onChange={(event) => setCustomMintInput(event.target.value.trim())}
-                    placeholder="Paste Solana token mint"
+                    value={recipient}
+                    onChange={(event) => setRecipient(event.target.value.trim())}
+                    placeholder={isEvmChain ? "0x… destination address" : "Paste Solana address"}
                     autoComplete="off"
                     spellCheck={false}
                     disabled={sweeping}
-                    aria-label="Custom Solana token mint"
-                    aria-invalid={Boolean(customMintInput) && !isValidSolAddress(customMintInput)}
+                    aria-invalid={Boolean(recipient) && !validRecipient}
                   />
-                )}
-                {!activeToken && (
-                  <span className="sweep-inline-hint">
-                    {selectedTokenMint === "custom"
-                      ? "Enter a valid Solana mint and confirm that selected wallets have been scanned for it."
-                      : "Choose a discovered token or enter a custom mint."}
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="sweep-field-card">
-            <label className="sweep-field-label" htmlFor="sweep-recipient">Recipient address</label>
-            <div className="sweep-recipient-wrap">
-              <input
-                id="sweep-recipient"
-                className="sweep-text-input mono"
-                value={recipient}
-                onChange={(event) => setRecipient(event.target.value.trim())}
-                placeholder={isEvmChain ? "0x… destination address" : "Solana destination address"}
-                autoComplete="off"
-                spellCheck={false}
-                disabled={sweeping}
-                aria-invalid={Boolean(recipient) && !validRecipient}
-              />
-              {recipient && (
-                <span className={`sweep-address-state ${validRecipient ? "is-valid" : "is-invalid"}`}>
-                  {validRecipient ? "Valid" : "Invalid"}
+                  {recipient && (
+                    <span className={`sweep-address-state ${validRecipient ? "is-valid" : "is-invalid"}`}>
+                      {validRecipient ? "Valid" : "Invalid"}
+                    </span>
+                  )}
+                </div>
+                <span className="sweep-inline-hint">
+                  {isTokenTransfer ? "The selected SPL token will be transferred to this address." : "All eligible native balance, less required network fees, goes to this address."}
                 </span>
-              )}
-            </div>
-            <span className="sweep-inline-hint">
-              {isTokenTransfer ? "The selected SPL token will be transferred to this wallet." : "All eligible native balance, minus required network fees, goes to this address."}
-            </span>
-          </div>
+              </div>
 
-          <div className="sweep-field-card sweep-fee-card">
-            {isEvmChain ? (
-              <>
-                <div className="sweep-field-heading-row">
-                  <label className="sweep-field-label">Network fee</label>
-                  <span className={`sweep-fee-live ${feeDataLive ? "is-live" : ""}`}>
-                    <span className="sweep-gate-dot" />
-                    {feeDataLive ? "Live quote" : "Estimate"} · {gasPriceGwei.toFixed(2)} Gwei
-                  </span>
-                </div>
-                <div className="sweep-gas-options" role="group" aria-label="Gas speed">
-                  <button type="button" className={gasMode === "standard" ? "is-active" : ""} onClick={() => applyGasMode("standard")} disabled={sweeping}>
-                    Standard <small>{liveFeeGwei.toFixed(2)}</small>
-                  </button>
-                  <button type="button" className={gasMode === "fast" ? "is-active" : ""} onClick={() => applyGasMode("fast")} disabled={sweeping}>
-                    Fast <small>{(liveFeeGwei * 1.25).toFixed(2)}</small>
-                  </button>
-                  <button type="button" className={gasMode === "turbo" ? "is-active" : ""} onClick={() => applyGasMode("turbo")} disabled={sweeping}>
-                    Turbo <small>{(liveFeeGwei * 2).toFixed(2)}</small>
-                  </button>
-                  <button
-                    type="button"
-                    className={gasMode === "custom" ? "is-active" : ""}
-                    onClick={() => {
-                      setGasMode("custom");
-                      if (validCustomGasPrice) setGasPriceGwei(Number(customGwei));
-                    }}
-                    disabled={sweeping}
-                  >
-                    Custom
-                  </button>
-                </div>
-                {gasMode === "custom" && (
+              <div className="sweep-field-card sweep-fee-card">
+                {isEvmChain ? (
                   <>
-                  <div className="sweep-custom-gas">
-                    <input
-                      className="sweep-text-input mono"
-                      type="number"
-                      min="0.001"
-                      step="0.01"
-                      value={customGwei}
-                      onChange={(event) => {
-                        setCustomGwei(event.target.value);
-                        const value = Number(event.target.value);
-                        if (Number.isFinite(value) && value > 0) setGasPriceGwei(value);
-                      }}
+                    <div className="sweep-field-heading-row">
+                      <label className="sweep-field-label">Network fee</label>
+                      <span className={`sweep-fee-live ${feeDataLive ? "is-live" : ""}`}>
+                        <span className="sweep-gate-dot" /> {feeDataLive ? "Live quote" : "Estimate"} · {gasPriceGwei.toFixed(2)} Gwei
+                      </span>
+                    </div>
+                    <div className="sweep-gas-options" role="group" aria-label="Gas speed">
+                      <button type="button" className={gasMode === "standard" ? "is-active" : ""} onClick={() => applyGasMode("standard")} disabled={sweeping}>Standard <small>{liveFeeGwei.toFixed(2)}</small></button>
+                      <button type="button" className={gasMode === "fast" ? "is-active" : ""} onClick={() => applyGasMode("fast")} disabled={sweeping}>Fast <small>{(liveFeeGwei * 1.25).toFixed(2)}</small></button>
+                      <button type="button" className={gasMode === "turbo" ? "is-active" : ""} onClick={() => applyGasMode("turbo")} disabled={sweeping}>Turbo <small>{(liveFeeGwei * 2).toFixed(2)}</small></button>
+                      <button
+                        type="button"
+                        className={gasMode === "custom" ? "is-active" : ""}
+                        onClick={() => {
+                          setGasMode("custom");
+                          if (validCustomGasPrice) setGasPriceGwei(Number(customGwei));
+                        }}
+                        disabled={sweeping}
+                      >Custom</button>
+                    </div>
+                    {gasMode === "custom" && (
+                      <div className="sweep-custom-gas">
+                        <input
+                          className="sweep-text-input mono"
+                          type="number"
+                          min="0.001"
+                          step="0.01"
+                          value={customGwei}
+                          onChange={(event) => {
+                            setCustomGwei(event.target.value);
+                            const value = Number(event.target.value);
+                            if (Number.isFinite(value) && value > 0) setGasPriceGwei(value);
+                          }}
+                          disabled={sweeping}
+                          aria-label="Custom gas price in Gwei"
+                          aria-invalid={!validCustomGasPrice}
+                        />
+                        <span>Gwei</span>
+                        {!validCustomGasPrice && <span className="sweep-inline-hint">Enter a gas price greater than zero.</span>}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="sweep-field-heading-row">
+                      <label className="sweep-field-label" htmlFor="sweep-fee-payer">Solana fee sponsor</label>
+                      <span className="sweep-fee-live">Optional</span>
+                    </div>
+                    <select
+                      id="sweep-fee-payer"
+                      className="sweep-text-input"
+                      value={feePayerWalletId ?? "self"}
+                      onChange={(event) => setFeePayerWalletId(event.target.value === "self" ? null : Number(event.target.value))}
                       disabled={sweeping}
-                      aria-label="Custom gas price in Gwei"
-                      aria-invalid={!validCustomGasPrice}
-                    />
-                    <span>Gwei</span>
-                  </div>
-                  {!validCustomGasPrice && <span className="sweep-inline-hint">Enter a gas price greater than zero.</span>}
+                    >
+                      <option value="self">Each source wallet pays its own fee</option>
+                      {solFeePayers.map((feeWallet) => (
+                        <option key={feeWallet.id} value={feeWallet.id}>{feeWallet.label || `Wallet #${feeWallet.id}`} · {feeWallet.formatted}</option>
+                      ))}
+                    </select>
+                    <span className="sweep-inline-hint">
+                      {selectedFeePayer
+                        ? `${selectedFeePayer.label || `Wallet #${selectedFeePayer.id}`} sponsors eligible transfers; keep enough SOL there for the full batch.`
+                        : "Choose a funded wallet if a source cannot cover its own network fee."}
+                    </span>
                   </>
                 )}
-              </>
-            ) : (
-              <>
-                <div className="sweep-field-heading-row">
-                  <label className="sweep-field-label" htmlFor="sweep-fee-payer">Solana fee sponsor</label>
-                  <span className="sweep-fee-live">Optional</span>
+              </div>
+            </div>
+          </section>
+
+          <section className="trading-card sweep-wallet-card">
+            <div className="trading-card-heading sweep-wallet-heading">
+              <div className="trading-card-heading-main">
+                <span className="trading-step">02</span>
+                <div>
+                  <h3>Review source wallets</h3>
+                  <p>
+                    {loadingEstimates
+                      ? "Refreshing balances and fee estimates…"
+                      : `${readyWallets.length} of ${targetWallets.length} selected wallet${targetWallets.length === 1 ? "" : "s"} ready to transfer.`}
+                  </p>
                 </div>
-                <select
-                  id="sweep-fee-payer"
-                  className="sweep-text-input"
-                  value={feePayerWalletId ?? "self"}
-                  onChange={(event) => setFeePayerWalletId(event.target.value === "self" ? null : Number(event.target.value))}
-                  disabled={sweeping}
-                >
-                  <option value="self">Each source wallet pays its own fee</option>
-                  {solFeePayers.map((wallet) => (
-                    <option key={wallet.id} value={wallet.id}>
-                      {wallet.label || `Wallet #${wallet.id}`} · {wallet.formatted}
-                    </option>
-                  ))}
-                </select>
-                <span className="sweep-inline-hint">
-                  {selectedFeePayer
-                    ? `${selectedFeePayer.label || `Wallet #${selectedFeePayer.id}`} sponsors eligible transfers; keep enough SOL there for the full batch.`
-                    : "Choose a funded wallet if a source cannot cover its own network fee."}
-                </span>
-              </>
-            )}
-          </div>
-        </div>
-      </section>
-
-      <section className="sweep-card sweep-wallet-card" aria-labelledby="sweep-wallets-title">
-        <div className="sweep-card-heading sweep-wallet-heading">
-          <span className="sweep-step-number">03</span>
-          <div>
-            <h3 id="sweep-wallets-title">Review source wallets</h3>
-            <p>
-              {loadingEstimates
-                ? "Refreshing balances and fee estimates…"
-                : `${readyWallets.length} of ${targetWallets.length} selected wallet${targetWallets.length === 1 ? "" : "s"} ready to transfer.`}
-            </p>
-          </div>
-          <button
-            type="button"
-            className="sweep-select-all"
-            onClick={() => selectAllFunded(isEvmChain ? "evm" : "sol")}
-            disabled={sweeping || activeFamilyFundedCount === 0}
-          >
-            Select funded {isEvmChain ? "EVM" : "Solana"} wallets <span>{activeFamilyFundedCount}</span>
-          </button>
-        </div>
-
-        {targetWallets.length === 0 ? (
-          <div className="sweep-empty-state">
-            <div className="sweep-empty-icon"><IconArrowLeft size={18} /></div>
-            <div>
-              <strong>No source wallets selected</strong>
-              <p>Select wallets in your portfolio, or use “Select funded wallets” above.</p>
+              </div>
+              {!wallet && (
+                <button
+                  type="button"
+                  className="sweep-select-all"
+                  onClick={() => selectAllFunded(isEvmChain ? "evm" : "sol")}
+                  disabled={sweeping || activeFamilyFundedCount === 0}
+                >Select funded wallets <span>{activeFamilyFundedCount}</span></button>
+              )}
             </div>
-          </div>
-        ) : (
-          <div className="sweep-table-scroll">
-            <table className="sweep-review-table">
-              <thead>
-                <tr>
-                  <th>Source wallet</th>
-                  <th>Current balance</th>
-                  <th>Est. fee</th>
-                  <th>Est. to recipient</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {targetWallets.map((wallet) => {
-                  const estimate = estimates[wallet.id];
-                  const result = txResults[wallet.id];
-                  const address = getWalletTargetAddress(wallet, isEvmChain);
-                  const currentBalance = isTokenTransfer
-                    ? getSolanaToken(wallet, activeToken?.mint || "")?.balance || `0 ${activeToken?.symbol || "TOKEN"}`
-                    : wallet.balances?.[chainKey] || `0 ${activeChain.symbol}`;
-                  return (
-                    <tr key={wallet.id}>
-                      <td>
-                        <div className="sweep-source-cell">
-                          <strong>{wallet.label || `Wallet #${wallet.id}`}</strong>
-                          <span className="mono">{shortAddr(address)}</span>
-                        </div>
-                      </td>
-                      <td className="mono">{result?.success ? "Transferred" : currentBalance}</td>
-                      <td className="mono sweep-secondary-value">{estimate ? formatCompactBalance(estimate.feeFormatted) : loadingEstimates ? "Calculating…" : "—"}</td>
-                      <td className="mono sweep-net-value">
-                        {result?.success
-                          ? result.amountSent || "Confirmed"
-                          : estimate?.isSweepable
-                            ? formatCompactBalance(estimate.netFormatted)
-                            : estimate?.statusText || (loadingEstimates ? "Calculating…" : "—")}
-                      </td>
-                      <td>
-                        {result ? (
-                          <div className="sweep-result-cell">
-                            <span className={`sweep-status-pill ${result.success ? "is-success" : result.pending ? "is-pending" : "is-failed"}`}>
-                              {result.success ? <><IconCheckCircle size={12} /> Confirmed</> : result.pending ? "Pending" : <><IconAlertTriangle size={12} /> Failed</>}
-                            </span>
-                            {result.txHash && result.explorerUrl && (
-                              <a href={result.explorerUrl} target="_blank" rel="noopener noreferrer">View transaction ↗</a>
+
+            {targetWallets.length === 0 ? (
+              <div className="sweep-empty-state">
+                <div className="sweep-empty-icon"><IconArrowLeft size={18} /></div>
+                <div>
+                  <strong>No source wallets selected</strong>
+                  <p>{wallet ? "This wallet has no address for the selected network." : "Select wallets in Portfolio, or choose funded wallets above."}</p>
+                </div>
+              </div>
+            ) : (
+              <div className="sweep-table-scroll">
+                <table className="sweep-review-table">
+                  <thead>
+                    <tr><th>Source wallet</th><th>Current balance</th><th>Est. fee</th><th>To recipient</th><th>Status</th></tr>
+                  </thead>
+                  <tbody>
+                    {targetWallets.map((sourceWallet) => {
+                      const estimate = estimates[sourceWallet.id];
+                      const result = txResults[sourceWallet.id];
+                      const address = getWalletTargetAddress(sourceWallet, isEvmChain);
+                      const currentBalance = isTokenTransfer
+                        ? getSolanaToken(sourceWallet, activeToken?.mint || "")?.balance || `0 ${activeToken?.symbol || "TOKEN"}`
+                        : sourceWallet.balances?.[chainKey] || `0 ${activeChain.symbol}`;
+                      return (
+                        <tr key={sourceWallet.id}>
+                          <td>
+                            <div className="sweep-source-cell">
+                              <strong>{sourceWallet.label || `Wallet #${sourceWallet.id}`}</strong>
+                              <span className="mono">{shortAddr(address)}</span>
+                            </div>
+                          </td>
+                          <td className="mono">{result?.success ? "Transferred" : currentBalance}</td>
+                          <td className="mono sweep-secondary-value">{estimate ? formatCompactBalance(estimate.feeFormatted) : loadingEstimates ? "Calculating…" : "—"}</td>
+                          <td className="mono sweep-net-value">
+                            {result?.success
+                              ? result.amountSent || "Confirmed"
+                              : estimate?.isSweepable
+                                ? formatCompactBalance(estimate.netFormatted)
+                                : estimate?.statusText || (loadingEstimates ? "Calculating…" : "—")}
+                          </td>
+                          <td>
+                            {result ? (
+                              <div className="sweep-result-cell">
+                                <span className={`sweep-status-pill ${result.success ? "is-success" : result.pending ? "is-pending" : "is-failed"}`}>
+                                  {result.success ? <><IconCheckCircle size={12} /> Confirmed</> : result.pending ? "Pending" : <><IconAlertTriangle size={12} /> Failed</>}
+                                </span>
+                                {result.txHash && result.explorerUrl && <a href={result.explorerUrl} target="_blank" rel="noopener noreferrer">View transaction ↗</a>}
+                                {!result.success && !result.pending && result.error && <span className="sweep-result-error" title={result.error}>{result.error}</span>}
+                              </div>
+                            ) : estimate?.isSweepable ? (
+                              <span className="sweep-status-pill is-ready">Ready</span>
+                            ) : estimate ? (
+                              <span className="sweep-status-pill is-muted" title={estimate.statusText}>{estimate.statusText}</span>
+                            ) : (
+                              <span className="sweep-status-pill is-muted">{loadingEstimates ? "Estimating" : "—"}</span>
                             )}
-                            {!result.success && !result.pending && result.error && <span className="sweep-result-error" title={result.error}>{result.error}</span>}
-                          </div>
-                        ) : estimate?.isSweepable ? (
-                          <span className="sweep-status-pill is-ready">Ready</span>
-                        ) : estimate ? (
-                          <span className="sweep-status-pill is-muted" title={estimate.statusText}>{estimate.statusText}</span>
-                        ) : (
-                          <span className="sweep-status-pill is-muted">—</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <footer className="sweep-action-bar">
-        <div className="sweep-action-summary">
-          <div>
-            <span>Ready wallets</span>
-            <strong>{readyWallets.length} <small>/ {targetWallets.length}</small></strong>
-          </div>
-          <div>
-            <span>Estimated total to recipient</span>
-            <strong className="mono">{totalToDestination}</strong>
-          </div>
-          {sweeping && sweepProgress && (
-            <div className="sweep-progress-copy" aria-live="polite">
-              Transfer {sweepProgress.current} of {sweepProgress.total}…
-            </div>
-          )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
         </div>
-        <button
-          type="button"
-          className="sweep-submit-button"
-          onClick={() => void handleSweep()}
-          disabled={
-            sweeping || loadingEstimates || !sessionToken || !networkSessionReady || isAirGapped ||
-            !validRecipient || readyWallets.length === 0 || (isTokenTransfer && !activeToken) ||
-            (isEvmChain && gasMode === "custom" && !validCustomGasPrice)
-          }
-        >
-          {sweeping
-            ? `Transferring ${sweepProgress?.current ?? 0}/${sweepProgress?.total ?? readyWallets.length}…`
-            : <><IconZap size={15} /> Transfer {assetLabelForButton(isTokenTransfer, activeToken?.symbol, activeChain.symbol)}</>}
-        </button>
-      </footer>
 
-      <p className="sweep-separation-note">
-        Smart Sweeper transfers assets only. Use <strong>DEX Trader</strong> for token swaps.
-      </p>
+        <aside className="trading-stack trading-summary-stack">
+          <section className="trading-card trading-summary-card">
+            <div className="trading-summary-heading">
+              <div><h3>Transfer review</h3><p>Review the recipient and each source wallet before continuing.</p></div>
+              <span className="trading-preview-pill"><i /> Confirmation required</span>
+            </div>
+            <div className="trading-summary-stats">
+              <div className="trading-summary-stat"><span>Source wallets</span><strong>{readyWallets.length} of {targetWallets.length}</strong></div>
+              <div className="trading-summary-stat"><span>Asset</span><strong className="good">{transferAssetSymbol}</strong></div>
+            </div>
+            <div className="trading-review-lines">
+              <div className="trading-review-line"><span>Network</span><b>{activeChain.name}</b></div>
+              <div className="trading-review-line"><span>Recipient</span><b>{recipientSummary}</b></div>
+              <div className="trading-review-line"><span>Fee setting</span><b>{feeSummary}</b></div>
+              <div className="trading-review-line"><span>Est. total</span><b>{totalToDestination}</b></div>
+            </div>
+            <div className="trading-warning">Transfers are irreversible. Confirm the recipient, source list, fee setting, and estimates in the native confirmation prompt. Unavailable rows will not be sent.</div>
+            <button
+              type="button"
+              className="trading-primary-button"
+              onClick={() => void handleSweep()}
+              disabled={
+                sweeping || loadingEstimates || !sessionToken || !networkSessionReady || isAirGapped ||
+                !validRecipient || readyWallets.length === 0 || (isTokenTransfer && !activeToken) ||
+                (isEvmChain && gasMode === "custom" && !validCustomGasPrice)
+              }
+            >
+              {sweeping
+                ? `Transferring ${sweepProgress?.current ?? 0}/${sweepProgress?.total ?? readyWallets.length}…`
+                : <>Review transfer →</>}
+            </button>
+          </section>
+        </aside>
+      </div>
     </div>
   );
-}
 
-function assetLabelForButton(isTokenTransfer: boolean, tokenSymbol: string | undefined, nativeSymbol: string): string {
-  return isTokenTransfer ? `${tokenSymbol || "SPL token"} to recipient` : `${nativeSymbol} to recipient`;
 }

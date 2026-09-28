@@ -6,8 +6,7 @@ import { copySensitiveToClipboard } from "../../lib/crypto/security";
 import { balanceAmount, chainsForWallet, tokenBalanceAmount } from "../../lib/chains/chains";
 import type { WalletView } from "../../lib/types/index";
 import { deriveDualCredentialsNative, walletHasScanTarget, type DualCredentials } from "../../lib/wallets/wallet";
-import { SweeperWorkspace } from "../workspaces/SweeperWorkspace";
-import { DexBatchTrader } from "../trade/DexBatchTrader";
+import { TradingWorkspace } from "../trade/TradingWorkspace";
 import { WalletActivityExplorer } from "./WalletActivityExplorer";
 import { WalletHeader, type DetailMode } from "./detail/WalletHeader";
 import { WalletCredentialsCard } from "./detail/WalletCredentialsCard";
@@ -351,10 +350,8 @@ export function WalletDetail({ wallet }: { wallet: WalletView }) {
         toast={toast}
       />
 
-      {activeTab === "sweeper" ? (
-        <SweeperWorkspace onBack={() => setActiveTab("portfolio")} />
-      ) : activeTab === "dex" ? (
-        <DexBatchTrader wallet={wallet} />
+      {activeTab === "trading" ? (
+        <TradingWorkspace wallet={wallet} />
       ) : activeTab === "explorer" ? (
         <WalletActivityExplorer wallet={wallet} />
       ) : (
