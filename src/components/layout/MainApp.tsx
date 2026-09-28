@@ -428,7 +428,7 @@ export function MainApp() {
               data-tooltip={
                 isAirGapped
                   ? "Safe Mode: app-controlled network requests are disabled (Click to go Online)"
-                  : "Online Mode: Live RPC network active (Click to activate Safe Mode)"
+                  : "Online Mode: app-controlled network requests allowed (Click to activate Safe Mode)"
               }
               data-tooltip-pos="bottom"
             >

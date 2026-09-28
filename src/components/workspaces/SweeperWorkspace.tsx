@@ -53,6 +53,7 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
   const [gasMode, setGasMode] = useState<"standard" | "fast" | "turbo" | "custom">("standard");
   const [customGwei, setCustomGwei] = useState<string>("1.5");
   const [liveFeeGwei, setLiveFeeGwei] = useState<number>(1.2);
+  const [feeDataLive, setFeeDataLive] = useState(false);
   const [loadingEstimates, setLoadingEstimates] = useState<boolean>(false);
   const [estimates, setEstimates] = useState<Record<number, WalletSweepEstimate>>({});
   const [sweeping, setSweeping] = useState<boolean>(false);
@@ -190,17 +191,25 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
     }
   }, [chainKey, solCandidateFeePayers, feePayerWalletId]);
 
-  // Load live fee data when chain changes
+  // Load fee data only when the native online-session gate is ready.
   useEffect(() => {
-    if (!sessionToken || !networkSessionReady || isAirGapped) return;
+    if (!sessionToken || !networkSessionReady || isAirGapped) {
+      setFeeDataLive(false);
+      return;
+    }
     let active = true;
+    setFeeDataLive(false);
     fetchLiveFeeData(sessionToken, chainKey)
       .then((data) => {
         if (!active) return;
         setLiveFeeGwei(data.gasPriceGwei);
         setGasPriceGwei(data.gasPriceGwei);
+        setFeeDataLive(true);
       })
-      .catch((err) => console.warn("Failed fetching fee data:", err));
+      .catch((err) => {
+        if (active) setFeeDataLive(false);
+        console.warn("Failed fetching fee data:", err);
+      });
     return () => {
       active = false;
     };
@@ -423,8 +432,8 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
           `Est. Total Yield: ${totalNetFormatted}\n` +
           `Slippage: ${(slippageBps / 100).toFixed(1)}%\n` +
           `Gas Sponsor: ${feePayerWalletId ? "Single-Funder Active (Fee Payer covers gas)" : "Self-Funded"}\n` +
-          `Direct Recipient Address (Proceeds go 100% here):\n${recipient.trim()}\n\n` +
-          `Sub-wallets do NOT need SOL and will NOT receive SOL. The entire SOL yield is delivered straight to the Recipient Address above.\n\n` +
+          `Configured Recipient Address for SOL proceeds:\n${recipient.trim()}\n\n` +
+          `The route is configured to deliver proceeds to this address; verify the on-chain transaction before relying on the destination.\n\n` +
           `Proceed with DEX swap broadcast?`
         : isDexBuy
         ? (buyFundingMode === "master"
@@ -477,287 +486,292 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
     let pendingCount = 0;
     let failCount = 0;
 
-    for (let i = 0; i < sweepableWallets.length; i++) {
-      if (
-        sessionTokenRef.current !== sweepSessionToken ||
-        !networkSessionReadyRef.current ||
-        isAirGappedRef.current
-      ) {
-        toast("Operation stopped before the next wallet because the authenticated Online Mode session ended.", "info");
-        break;
-      }
-      const w = sweepableWallets[i];
-      const fromAddr = getWalletTargetAddr(w, isEvmChain);
+    try {
+      for (let i = 0; i < sweepableWallets.length; i++) {
+        if (
+          sessionTokenRef.current !== sweepSessionToken ||
+          !networkSessionReadyRef.current ||
+          isAirGappedRef.current
+        ) {
+          toast("Operation stopped before the next wallet because the authenticated Online Mode session ended.", "info");
+          break;
+        }
+        const w = sweepableWallets[i];
+        const fromAddr = getWalletTargetAddr(w, isEvmChain);
 
-      if (chainKey === "sol" && assetMode === "token") {
-        const tok = w.tokens?.find((t) => t.chain?.toLowerCase() === "sol" && t.contractAddress === activeTokenMint);
-        const tokenSym = tok?.symbol || activeTokenInfo?.symbol || "TOKEN";
+        if (chainKey === "sol" && assetMode === "token") {
+          const tok = w.tokens?.find((t) => t.chain?.toLowerCase() === "sol" && t.contractAddress === activeTokenMint);
+          const tokenSym = tok?.symbol || activeTokenInfo?.symbol || "TOKEN";
 
-        let res: SweepTxResult;
+          let res: SweepTxResult;
 
-        if (tokenAction === "dex_sell") {
-          setSweepProgress({
-            current: i + 1,
-            total: sweepableWallets.length,
-            msg: `Stealth DEX liquidating ${tokenSym} to SOL -> ${shortAddr(recipient.trim())}...`,
-          });
-
-          const feePayerAddr = feePayerWalletId
-            ? wallets.find((x) => x.id === feePayerWalletId)?.solAddress || fromAddr
-            : fromAddr;
-
-          res = await executeTokenDexSellSingle(
-            w.id,
-            sweepSessionToken,
-            feePayerWalletId ?? undefined,
-            feePayerAddr,
-            recipient.trim(),
-            fromAddr,
-            {
-              mint: activeTokenMint,
-              symbol: tokenSym,
-              name: tok?.name || activeTokenInfo?.name || "SPL Token",
-              decimals: activeTokenInfo?.decimals,
-              programId: activeTokenInfo?.programId,
-              rawBalance: tok?.rawBalance || "0",
-              balanceFormatted: tok?.balance || `0 ${tokenSym}`,
-            },
-            slippageBps
-          );
-        } else if (tokenAction === "dex_buy") {
-          if (buyFundingMode === "master") {
-            const masterWallet = selectedMasterWallet;
-            if (!masterWallet) {
-              toast("No Master Wallet with SOL found to fund purchases", "error");
-              setSweeping(false);
-              setSweepProgress(null);
-              return;
-            }
-
+          if (tokenAction === "dex_sell") {
             setSweepProgress({
               current: i + 1,
               total: sweepableWallets.length,
-              msg: `Master funding ${buyAmountSol} SOL of ${tokenSym} to ${shortAddr(recipient.trim() || fromAddr)}...`,
-            });
-
-            res = await executeMasterDexBuySingle(
-              masterWallet.id,
-              sweepSessionToken,
-              masterWallet.address,
-              fromAddr,
-              {
-                mint: activeTokenMint,
-                symbol: tokenSym,
-                decimals: activeTokenInfo?.decimals,
-                programId: activeTokenInfo?.programId,
-              },
-              (validBuyAmount ? parsedBuyAmountSol : 0),
-              slippageBps,
-              recipient.trim() || undefined,
-            );
-          } else {
-            setSweepProgress({
-              current: i + 1,
-              total: sweepableWallets.length,
-              msg: `Buying ${tokenSym} with ${buyAmountSol} SOL on wallet ${shortAddr(fromAddr)}...`,
+              msg: `Stealth DEX liquidating ${tokenSym} to SOL -> ${shortAddr(recipient.trim())}...`,
             });
 
             const feePayerAddr = feePayerWalletId
               ? wallets.find((x) => x.id === feePayerWalletId)?.solAddress || fromAddr
               : fromAddr;
 
-            res = await executeTokenDexBuySingle(
+            res = await executeTokenDexSellSingle(
               w.id,
               sweepSessionToken,
               feePayerWalletId ?? undefined,
               feePayerAddr,
+              recipient.trim(),
               fromAddr,
               {
                 mint: activeTokenMint,
                 symbol: tokenSym,
+                name: tok?.name || activeTokenInfo?.name || "SPL Token",
                 decimals: activeTokenInfo?.decimals,
+                programId: activeTokenInfo?.programId,
+                rawBalance: tok?.rawBalance || "0",
+                balanceFormatted: tok?.balance || `0 ${tokenSym}`,
               },
-              (validBuyAmount ? parsedBuyAmountSol : 0),
-              recipient.trim() || undefined,
               slippageBps
             );
+          } else if (tokenAction === "dex_buy") {
+            if (buyFundingMode === "master") {
+              const masterWallet = selectedMasterWallet;
+              if (!masterWallet) {
+                toast("No Master Wallet with SOL found to fund purchases", "error");
+                setSweeping(false);
+                setSweepProgress(null);
+                return;
+              }
+
+              setSweepProgress({
+                current: i + 1,
+                total: sweepableWallets.length,
+                msg: `Master funding ${buyAmountSol} SOL of ${tokenSym} to ${shortAddr(recipient.trim() || fromAddr)}...`,
+              });
+
+              res = await executeMasterDexBuySingle(
+                masterWallet.id,
+                sweepSessionToken,
+                masterWallet.address,
+                fromAddr,
+                {
+                  mint: activeTokenMint,
+                  symbol: tokenSym,
+                  decimals: activeTokenInfo?.decimals,
+                  programId: activeTokenInfo?.programId,
+                },
+                (validBuyAmount ? parsedBuyAmountSol : 0),
+                slippageBps,
+                recipient.trim() || undefined,
+              );
+            } else {
+              setSweepProgress({
+                current: i + 1,
+                total: sweepableWallets.length,
+                msg: `Buying ${tokenSym} with ${buyAmountSol} SOL on wallet ${shortAddr(fromAddr)}...`,
+              });
+
+              const feePayerAddr = feePayerWalletId
+                ? wallets.find((x) => x.id === feePayerWalletId)?.solAddress || fromAddr
+                : fromAddr;
+
+              res = await executeTokenDexBuySingle(
+                w.id,
+                sweepSessionToken,
+                feePayerWalletId ?? undefined,
+                feePayerAddr,
+                fromAddr,
+                {
+                  mint: activeTokenMint,
+                  symbol: tokenSym,
+                  decimals: activeTokenInfo?.decimals,
+                },
+                (validBuyAmount ? parsedBuyAmountSol : 0),
+                recipient.trim() || undefined,
+                slippageBps
+              );
+            }
+          } else {
+            setSweepProgress({
+              current: i + 1,
+              total: sweepableWallets.length,
+              msg: `Sweeping ${tokenSym} from wallet ${shortAddr(fromAddr)}...`,
+            });
+
+            res = await executeTokenSweepSingle(
+              w.id,
+              sweepSessionToken,
+              feePayerWalletId ?? undefined,
+              recipient.trim(),
+              fromAddr,
+              {
+                mint: activeTokenMint,
+                symbol: tokenSym,
+                name: tok?.name || activeTokenInfo?.name || "SPL Token",
+                decimals: activeTokenInfo?.decimals,
+                programId: activeTokenInfo?.programId,
+                rawBalance: tok?.rawBalance || "0",
+                balanceFormatted: tok?.balance || `0 ${tokenSym}`,
+              }
+            );
+          }
+
+          results[w.id] = res;
+          const actorAddress = tokenAction === "dex_buy" && buyFundingMode === "master"
+            ? selectedMasterWallet?.address || fromAddr
+            : fromAddr;
+          const outputAddress = tokenAction === "dex_buy" ? (recipient.trim() || fromAddr) : recipient.trim();
+
+          if (res.success) {
+            successCount++;
+            if (tokenAction !== "dex_buy") {
+              optimisticClearSweptWalletBalance(w.id, "sol", activeTokenMint, tokenSym);
+              setEstimates((prev) => {
+                const next = { ...prev };
+                delete next[w.id];
+                return next;
+              });
+            }
+            logActivity({
+              type: tokenAction === "dex_buy" || tokenAction === "dex_sell" ? "trade" : "sweep",
+              title: tokenAction === "dex_buy"
+                ? `DEX Buy Confirmed (${tokenSym})`
+                : tokenAction === "dex_sell"
+                ? `DEX Sell Confirmed (${tokenSym})`
+                : `Swept ${tokenSym} to Cold Storage`,
+              desc: tokenAction === "dex_buy"
+                ? buyFundingMode === "master"
+                  ? `Bought with ${buyAmountSol} SOL for recipient ${shortAddr(outputAddress)} (funded by Master ${shortAddr(actorAddress)}).`
+                  : `Purchased with ${buyAmountSol} SOL on wallet ${shortAddr(fromAddr)}${feePayerWalletId && feePayerWalletId !== w.id ? " (fee sponsored)" : ""}.`
+                : tokenAction === "dex_sell"
+                ? `Sold from ${shortAddr(fromAddr)}; SOL proceeds delivered to ${shortAddr(recipient.trim())}.`
+                : `Transferred from ${shortAddr(fromAddr)} to ${shortAddr(recipient.trim())}.`,
+              amount: res.amountSent,
+              amountColor: "var(--ok)",
+              status: "success",
+              chain: "sol",
+              txHash: res.txHash,
+              explorerUrl: res.explorerUrl,
+              recipient: outputAddress,
+              sender: actorAddress,
+              metadata: { walletId: w.id, fundingMode: tokenAction === "dex_buy" ? buyFundingMode : undefined, confirmationStatus: res.confirmationStatus || "confirmed" },
+            });
+          } else if (res.pending) {
+            pendingCount++;
+            logActivity({
+              type: tokenAction === "dex_buy" || tokenAction === "dex_sell" ? "trade" : "sweep",
+              title: tokenAction === "dex_buy" ? `DEX Buy Pending (${tokenSym})` : tokenAction === "dex_sell" ? `DEX Sell Pending (${tokenSym})` : `Sweep Pending (${tokenSym})`,
+              desc: res.error || `Transaction submitted from ${shortAddr(actorAddress)}; awaiting on-chain confirmation.`,
+              amount: res.amountSent || "Awaiting confirmation",
+              amountColor: "var(--warning)",
+              status: "warning",
+              chain: "sol",
+              txHash: res.txHash,
+              explorerUrl: res.explorerUrl,
+              recipient: outputAddress,
+              sender: actorAddress,
+              metadata: { walletId: w.id, confirmationStatus: res.confirmationStatus || "pending" },
+            });
+          } else {
+            failCount++;
+            logActivity({
+              type: tokenAction === "dex_buy" || tokenAction === "dex_sell" ? "trade" : "sweep",
+              title: tokenAction === "dex_buy" ? `DEX Buy Failed (${tokenSym})` : tokenAction === "dex_sell" ? `DEX Liquidation Failed (${tokenSym})` : `Sweep Failed (${tokenSym})`,
+              desc: res.error || `Broadcast failed for ${shortAddr(fromAddr)}`,
+              amount: "Failed",
+              amountColor: "var(--danger)",
+              status: "failed",
+              chain: "sol",
+              txHash: res.txHash,
+              explorerUrl: res.explorerUrl,
+              recipient: outputAddress,
+              sender: actorAddress,
+              metadata: { walletId: w.id, confirmationStatus: res.confirmationStatus || "failed" },
+            });
           }
         } else {
           setSweepProgress({
             current: i + 1,
             total: sweepableWallets.length,
-            msg: `Sweeping ${tokenSym} from wallet ${shortAddr(fromAddr)}...`,
+            msg: `Broadcasting from wallet ${shortAddr(fromAddr)}...`,
           });
 
-          res = await executeTokenSweepSingle(
+          const res = await executeSweepSingle(
             w.id,
             sweepSessionToken,
-            feePayerWalletId ?? undefined,
+            chainKey,
             recipient.trim(),
+            gasPriceGwei,
             fromAddr,
-            {
-              mint: activeTokenMint,
-              symbol: tokenSym,
-              name: tok?.name || activeTokenInfo?.name || "SPL Token",
-              decimals: activeTokenInfo?.decimals,
-              programId: activeTokenInfo?.programId,
-              rawBalance: tok?.rawBalance || "0",
-              balanceFormatted: tok?.balance || `0 ${tokenSym}`,
-            }
+            chainKey === "sol" ? (feePayerWalletId ?? undefined) : undefined
           );
-        }
 
-        results[w.id] = res;
-        const actorAddress = tokenAction === "dex_buy" && buyFundingMode === "master"
-          ? selectedMasterWallet?.address || fromAddr
-          : fromAddr;
-        const outputAddress = tokenAction === "dex_buy" ? (recipient.trim() || fromAddr) : recipient.trim();
-
-        if (res.success) {
-          successCount++;
-          if (tokenAction !== "dex_buy") {
-            optimisticClearSweptWalletBalance(w.id, "sol", activeTokenMint, tokenSym);
+          results[w.id] = res;
+          if (res.success) {
+            successCount++;
+            optimisticClearSweptWalletBalance(w.id, chainKey, undefined, activeChain.symbol);
             setEstimates((prev) => {
               const next = { ...prev };
               delete next[w.id];
               return next;
             });
+            logActivity({
+              type: "sweep",
+              title: `Swept ${activeChain.symbol} to Cold Storage`,
+              desc: `Transferred from ${shortAddr(fromAddr)} to ${shortAddr(recipient.trim())} ${chainKey === "sol" && feePayerWalletId && feePayerWalletId !== w.id ? "(Gas Sponsored)" : ""}`,
+              amount: res.amountSent,
+              amountColor: "var(--ok)",
+              status: "success",
+              chain: chainKey,
+              txHash: res.txHash,
+              explorerUrl: res.explorerUrl,
+              recipient: recipient.trim(),
+              sender: fromAddr,
+            });
+          } else if (res.pending) {
+            pendingCount++;
+            logActivity({
+              type: "sweep",
+              title: `Sweep Pending (${activeChain.symbol})`,
+              desc: res.error || `Transaction submitted from ${shortAddr(fromAddr)}; awaiting on-chain confirmation.`,
+              amount: res.amountSent || "Awaiting confirmation",
+              amountColor: "var(--warning)",
+              status: "warning",
+              chain: chainKey,
+              txHash: res.txHash,
+              explorerUrl: res.explorerUrl,
+              recipient: recipient.trim(),
+              sender: fromAddr,
+              metadata: { walletId: w.id, confirmationStatus: res.confirmationStatus || "pending" },
+            });
+          } else {
+            failCount++;
+            logActivity({
+              type: "sweep",
+              title: `Sweep Failed (${activeChain.symbol})`,
+              desc: res.error || `Broadcast failed for ${shortAddr(fromAddr)}`,
+              amount: "Failed",
+              amountColor: "var(--danger)",
+              status: "failed",
+              chain: chainKey,
+              txHash: res.txHash,
+              explorerUrl: res.explorerUrl,
+              recipient: recipient.trim(),
+              sender: fromAddr,
+              metadata: { walletId: w.id, confirmationStatus: res.confirmationStatus || "failed" },
+            });
           }
-          logActivity({
-            type: tokenAction === "dex_buy" || tokenAction === "dex_sell" ? "trade" : "sweep",
-            title: tokenAction === "dex_buy"
-              ? `DEX Buy Confirmed (${tokenSym})`
-              : tokenAction === "dex_sell"
-              ? `DEX Sell Confirmed (${tokenSym})`
-              : `Swept ${tokenSym} to Cold Storage`,
-            desc: tokenAction === "dex_buy"
-              ? buyFundingMode === "master"
-                ? `Bought with ${buyAmountSol} SOL for recipient ${shortAddr(outputAddress)} (funded by Master ${shortAddr(actorAddress)}).`
-                : `Purchased with ${buyAmountSol} SOL on wallet ${shortAddr(fromAddr)}${feePayerWalletId && feePayerWalletId !== w.id ? " (fee sponsored)" : ""}.`
-              : tokenAction === "dex_sell"
-              ? `Sold from ${shortAddr(fromAddr)}; SOL proceeds delivered to ${shortAddr(recipient.trim())}.`
-              : `Transferred from ${shortAddr(fromAddr)} to ${shortAddr(recipient.trim())}.`,
-            amount: res.amountSent,
-            amountColor: "var(--ok)",
-            status: "success",
-            chain: "sol",
-            txHash: res.txHash,
-            explorerUrl: res.explorerUrl,
-            recipient: outputAddress,
-            sender: actorAddress,
-            metadata: { walletId: w.id, fundingMode: tokenAction === "dex_buy" ? buyFundingMode : undefined, confirmationStatus: res.confirmationStatus || "confirmed" },
-          });
-        } else if (res.pending) {
-          pendingCount++;
-          logActivity({
-            type: tokenAction === "dex_buy" || tokenAction === "dex_sell" ? "trade" : "sweep",
-            title: tokenAction === "dex_buy" ? `DEX Buy Pending (${tokenSym})` : tokenAction === "dex_sell" ? `DEX Sell Pending (${tokenSym})` : `Sweep Pending (${tokenSym})`,
-            desc: res.error || `Transaction submitted from ${shortAddr(actorAddress)}; awaiting on-chain confirmation.`,
-            amount: res.amountSent || "Awaiting confirmation",
-            amountColor: "var(--warning)",
-            status: "warning",
-            chain: "sol",
-            txHash: res.txHash,
-            explorerUrl: res.explorerUrl,
-            recipient: outputAddress,
-            sender: actorAddress,
-            metadata: { walletId: w.id, confirmationStatus: res.confirmationStatus || "pending" },
-          });
-        } else {
-          failCount++;
-          logActivity({
-            type: tokenAction === "dex_buy" || tokenAction === "dex_sell" ? "trade" : "sweep",
-            title: tokenAction === "dex_buy" ? `DEX Buy Failed (${tokenSym})` : tokenAction === "dex_sell" ? `DEX Liquidation Failed (${tokenSym})` : `Sweep Failed (${tokenSym})`,
-            desc: res.error || `Broadcast failed for ${shortAddr(fromAddr)}`,
-            amount: "Failed",
-            amountColor: "var(--danger)",
-            status: "failed",
-            chain: "sol",
-            txHash: res.txHash,
-            explorerUrl: res.explorerUrl,
-            recipient: outputAddress,
-            sender: actorAddress,
-            metadata: { walletId: w.id, confirmationStatus: res.confirmationStatus || "failed" },
-          });
         }
-      } else {
-        setSweepProgress({
-          current: i + 1,
-          total: sweepableWallets.length,
-          msg: `Broadcasting from wallet ${shortAddr(fromAddr)}...`,
-        });
-
-        const res = await executeSweepSingle(
-          w.id,
-          sweepSessionToken,
-          chainKey,
-          recipient.trim(),
-          gasPriceGwei,
-          fromAddr,
-          chainKey === "sol" ? (feePayerWalletId ?? undefined) : undefined
-        );
-
-        results[w.id] = res;
-        if (res.success) {
-          successCount++;
-          optimisticClearSweptWalletBalance(w.id, chainKey, undefined, activeChain.symbol);
-          setEstimates((prev) => {
-            const next = { ...prev };
-            delete next[w.id];
-            return next;
-          });
-          logActivity({
-            type: "sweep",
-            title: `Swept ${activeChain.symbol} to Cold Storage`,
-            desc: `Transferred from ${shortAddr(fromAddr)} to ${shortAddr(recipient.trim())} ${chainKey === "sol" && feePayerWalletId && feePayerWalletId !== w.id ? "(Gas Sponsored)" : ""}`,
-            amount: res.amountSent,
-            amountColor: "var(--ok)",
-            status: "success",
-            chain: chainKey,
-            txHash: res.txHash,
-            explorerUrl: res.explorerUrl,
-            recipient: recipient.trim(),
-            sender: fromAddr,
-          });
-        } else if (res.pending) {
-          pendingCount++;
-          logActivity({
-            type: "sweep",
-            title: `Sweep Pending (${activeChain.symbol})`,
-            desc: res.error || `Transaction submitted from ${shortAddr(fromAddr)}; awaiting on-chain confirmation.`,
-            amount: res.amountSent || "Awaiting confirmation",
-            amountColor: "var(--warning)",
-            status: "warning",
-            chain: chainKey,
-            txHash: res.txHash,
-            explorerUrl: res.explorerUrl,
-            recipient: recipient.trim(),
-            sender: fromAddr,
-            metadata: { walletId: w.id, confirmationStatus: res.confirmationStatus || "pending" },
-          });
-        } else {
-          failCount++;
-          logActivity({
-            type: "sweep",
-            title: `Sweep Failed (${activeChain.symbol})`,
-            desc: res.error || `Broadcast failed for ${shortAddr(fromAddr)}`,
-            amount: "Failed",
-            amountColor: "var(--danger)",
-            status: "failed",
-            chain: chainKey,
-            txHash: res.txHash,
-            explorerUrl: res.explorerUrl,
-            recipient: recipient.trim(),
-            sender: fromAddr,
-            metadata: { walletId: w.id, confirmationStatus: res.confirmationStatus || "failed" },
-          });
-        }
+        setTxResults({ ...results });
       }
-      setTxResults({ ...results });
+    } catch (error) {
+      console.error("Sweeper batch stopped unexpectedly:", error);
+      toast(`Sweep stopped early: ${String(error)}`, "error");
+    } finally {
+      setSweeping(false);
+      setSweepProgress(null);
     }
-
-    setSweeping(false);
-    setSweepProgress(null);
 
     if (successCount > 0 || pendingCount > 0) {
       toast(
@@ -1172,7 +1186,7 @@ export function SweeperWorkspace({ onBack }: { onBack?: () => void }) {
               <div className="deck-col-header">
                 <span className="deck-col-label">3. GAS ENGINE SPEED ({gasPriceGwei.toFixed(2)} GWEI)</span>
                 <span className="deck-gas-live mono">
-                  <span className="live-dot" /> Live: {liveFeeGwei.toFixed(2)} Gwei
+                  <span className={`bal-card-status-dot ${feeDataLive ? "live" : ""}`} /> {feeDataLive ? "RPC" : "Est."}: {liveFeeGwei.toFixed(2)} Gwei
                 </span>
               </div>
               <div className="gas-segmented-bar">

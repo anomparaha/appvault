@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useApp } from "../../context/AppContext";
 import { ChainIcon, IconTrendingUp, IconTrendingDown, IconTarget, IconZap } from "../../icons";
 import type { WalletView } from "../../lib/types/index";
@@ -190,21 +191,41 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
     }
 
     if (tradeAction === "buy") {
-      if (isMasterBuy && selectedMasterWallet) {
-        const required = (amountNum + SOLANA_BUY_RESERVE_SOL) * recipientTargets.length;
-        if (selectedMasterWallet.solBalance < required) {
-          toast(`Master wallet needs about ${required.toFixed(3)} SOL including network/ATA reserves; balance is ${selectedMasterWallet.solFormatted}.`, "error");
-          return;
-        }
-      } else {
-        const shortWallet = recipientTargets.find((target) => {
-          const solBalance = Number.parseFloat(target.balances?.sol || "0") || 0;
-          return solBalance < amountNum + SOLANA_BUY_RESERVE_SOL;
+      try {
+        const buyLamports = BigInt(Math.floor(amountNum * 1e9));
+        const reserveLamports = BigInt(Math.ceil(SOLANA_BUY_RESERVE_SOL * 1e9));
+        const readBalance = async (address: string) => invoke<{ balance_hex: string }>("get_account_nonce_and_balance", {
+          sessionToken: tradeSessionToken,
+          chainKey: "sol",
+          address,
         });
-        if (shortWallet) {
-          toast(`Wallet ${shortAddr(shortWallet.solAddress || "")} needs ${amountNum} SOL plus a ${SOLANA_BUY_RESERVE_SOL.toFixed(3)} SOL fee/ATA reserve.`, "error");
-          return;
+
+        if (isMasterBuy && selectedMasterWallet) {
+          const account = await readBalance(selectedMasterWallet.address);
+          if (sessionTokenRef.current !== tradeSessionToken || !networkSessionReadyRef.current || isAirGappedRef.current) {
+            throw new Error("Online vault session ended while checking the master balance.");
+          }
+          const requiredLamports = (buyLamports + reserveLamports) * BigInt(recipientTargets.length);
+          if (BigInt(account.balance_hex) < requiredLamports) {
+            toast(`Master wallet needs about ${(Number(requiredLamports) / 1e9).toFixed(3)} SOL including network/ATA reserves.`, "error");
+            return;
+          }
+        } else {
+          for (const target of recipientTargets) {
+            if (sessionTokenRef.current !== tradeSessionToken || !networkSessionReadyRef.current || isAirGappedRef.current) {
+              throw new Error("Online vault session ended while checking wallet balances.");
+            }
+            const account = await readBalance(target.solAddress!);
+            const requiredLamports = buyLamports + reserveLamports;
+            if (BigInt(account.balance_hex) < requiredLamports) {
+              toast(`Wallet ${shortAddr(target.solAddress || "")} needs ${amountNum} SOL plus a ${SOLANA_BUY_RESERVE_SOL.toFixed(3)} SOL fee/ATA reserve.`, "error");
+              return;
+            }
+          }
         }
+      } catch (error) {
+        toast(`Could not verify live SOL funding balance: ${String(error)}`, "error");
+        return;
       }
     }
 
@@ -470,7 +491,7 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
             </span>
             {isSolana ? (
               <span className="dex-badge" style={{ background: "rgba(34, 197, 94, 0.15)", color: "#4ade80", border: "1px solid rgba(34, 197, 94, 0.3)" }}>
-                JUPITER V6 AGGREGATOR LIVE ✓
+                JUPITER V6 ROUTING · NOT LIVE-TESTED
               </span>
             ) : (
               <span className="dex-badge-warning" style={{ background: "var(--surface-3)", color: "var(--text-dim)", border: "1px solid var(--border)" }}>
@@ -487,7 +508,7 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
             {scopeMode === "single"
               ? `Trading langsung di dompet ${shortAddr(selectedSingleWallet?.solAddress || "")}. Token yang dibeli 100% masuk dan disimpan di dompet ini sendiri.`
               : isSolana
-              ? "Solana batch buying & selling is fully LIVE with Jupiter DEX aggregator and scoped hardware-grade signing."
+              ? "Solana DEX flow targets Jupiter v6 with vault-scoped native signing; live RPC and transaction behavior have not been verified in this build."
               : "Multi-wallet parallel swap execution on Uniswap and PancakeSwap is currently in development."}
           </p>
         </div>
@@ -541,7 +562,7 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
           <label className="dex-label">1. Blockchain Network</label>
           <div className="dex-chain-tabs">
             {[
-              { key: "sol", name: "Solana", dex: "Jupiter Aggregator (Live ✓)" },
+              { key: "sol", name: "Solana", dex: "Jupiter v6 (unverified)" },
               { key: "eth", name: "Ethereum", dex: "Uniswap V3" },
               { key: "robinhood", name: "Robinhood", dex: "Robinhood Swap" },
               { key: "base", name: "Base", dex: "Aerodrome" },
@@ -595,7 +616,7 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
                 </span>
               </div>
               <span className="dex-wallet-guarantee">
-                ✓ 100% token disimpan di dompet ini
+                Output ATA ditargetkan ke dompet ini
               </span>
             </div>
           </div>
@@ -607,6 +628,11 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
             <label className="dex-label" style={{ margin: 0 }}>
               {isSolana ? "2. Target Solana SPL Token (Mint Address)" : "2. Target Token Contract / Mint Address"}
             </label>
+            {isSolana && tokenAddress.trim().toLowerCase().endsWith("pump") && (
+              <span style={{ fontSize: "10px", fontWeight: "700", background: "rgba(34, 197, 94, 0.15)", color: "#4ade80", border: "1px solid rgba(34, 197, 94, 0.3)", borderRadius: "4px", padding: "2px 8px" }}>
+                💊 Pump.fun Token
+              </span>
+            )}
             {!isSolana && (
               <button
                 type="button"
@@ -644,7 +670,7 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
             <input
               type="text"
               className="dex-input mono"
-              placeholder={isSolana ? "Paste Solana SPL token mint address" : "Paste token address (0x...)"}
+              placeholder={isSolana ? "Paste Solana SPL Token Mint (misal: ...pump)" : "Paste token address (0x...)"}
               value={tokenAddress}
               onChange={(e) => setTokenAddress(e.target.value)}
             />
@@ -716,7 +742,7 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
                   ))}
                 </select>
                 <span style={{ fontSize: "11px", color: "#fbbf24" }}>
-                  ✓ Dompet Master membayar {(activeWalletsCount * (parseFloat(amountPerWallet) || 0.05)).toFixed(3)} SOL untuk swap + sekitar {(activeWalletsCount * SOLANA_BUY_RESERVE_SOL).toFixed(3)} SOL reserve biaya/ATA. Sub-wallet butuh 0 SOL!
+                  ✓ Dompet Master membayar {(activeWalletsCount * (parseFloat(amountPerWallet) || 0.05)).toFixed(3)} SOL untuk {activeWalletsCount} dompet. Sub-wallet butuh 0 SOL!
                 </span>
               </div>
             )}
@@ -728,70 +754,61 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
           <div className="dex-field flex-1">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "2px" }}>
               <label className="dex-label" style={{ margin: 0 }}>
-                {tradeAction === "sell"
-                  ? "3. Sell entire available token balance"
-                  : scopeMode === "single" ? "3. Buy Amount (SOL)" : "3. Amount per Wallet"}
+                {scopeMode === "single" ? "3. Buy Amount (SOL)" : "3. Amount per Wallet"}
               </label>
-              {tradeAction === "buy" && scopeMode === "single" && selectedSingleWallet && (
+              {scopeMode === "single" && selectedSingleWallet && (
                 <span style={{ fontSize: "10px", color: "var(--text-dim)" }}>
                   Saldo: <b style={{ color: "var(--text-main)" }}>{(selectedSingleWallet.balances?.sol || "0").replace(/\s*SOL\s*$/i, "")} SOL</b>
                 </span>
               )}
             </div>
 
-            {tradeAction === "buy" ? (
-              <>
-                <div className="amount-input-wrap">
-                  <input
-                    type="text"
-                    className="dex-input mono"
-                    value={amountPerWallet}
-                    onChange={(e) => setAmountPerWallet(e.target.value)}
-                  />
-                  <span className="amount-unit">{selectedChain === "bsc" ? "BNB" : selectedChain === "sol" ? "SOL" : "ETH"}</span>
-                </div>
+            <div className="amount-input-wrap">
+              <input
+                type="text"
+                className="dex-input mono"
+                value={amountPerWallet}
+                onChange={(e) => setAmountPerWallet(e.target.value)}
+              />
+              <span className="amount-unit">{selectedChain === "bsc" ? "BNB" : selectedChain === "sol" ? "SOL" : "ETH"}</span>
+            </div>
 
-                {scopeMode === "single" && isSolana && selectedSingleWallet && (
-                  <div className="dex-quick-presets">
-                    {["0.01", "0.05", "0.1", "0.25"].map((preset) => (
-                      <button
-                        key={preset}
-                        type="button"
-                        className={`dex-preset-btn ${amountPerWallet === preset ? "active" : ""}`}
-                        onClick={() => setAmountPerWallet(preset)}
-                      >
-                        {preset} SOL
-                      </button>
-                    ))}
-                    <button
-                      type="button"
-                      className="dex-preset-btn"
-                      onClick={() => {
-                        const raw = parseFloat((selectedSingleWallet.balances?.sol || "0").replace(/\s*SOL\s*$/i, "")) || 0;
-                        const half = Math.max(0, (raw * 0.5) - 0.002).toFixed(4);
-                        setAmountPerWallet(half);
-                      }}
-                    >
-                      50%
-                    </button>
-                    <button
-                      type="button"
-                      className="dex-preset-btn"
-                      onClick={() => {
-                        const raw = parseFloat((selectedSingleWallet.balances?.sol || "0").replace(/\s*SOL\s*$/i, "")) || 0;
-                        const max = Math.max(0, raw - 0.005).toFixed(4);
-                        setAmountPerWallet(max);
-                      }}
-                    >
-                      MAX
-                    </button>
-                  </div>
-                )}
-              </>
-            ) : (
-              <p style={{ margin: "8px 0 0", fontSize: "11px", color: "var(--text-dim)" }}>
-                This sells the full discovered balance of the selected mint in each wallet; SOL proceeds return to that wallet.
-              </p>
+            {/* Quick Amount Presets for Single Wallet Mode */}
+            {scopeMode === "single" && isSolana && selectedSingleWallet && (
+              <div className="dex-quick-presets">
+                {["0.01", "0.05", "0.1", "0.25"].map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    className={`dex-preset-btn ${amountPerWallet === preset ? "active" : ""}`}
+                    onClick={() => setAmountPerWallet(preset)}
+                  >
+                    {preset} SOL
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  className="dex-preset-btn"
+                  onClick={() => {
+                    const raw = parseFloat((selectedSingleWallet.balances?.sol || "0").replace(/\s*SOL\s*$/i, "")) || 0;
+                    const half = Math.max(0, (raw * 0.5) - 0.002).toFixed(4);
+                    setAmountPerWallet(half);
+                  }}
+                >
+                  50%
+                </button>
+                <button
+                  type="button"
+                  className="dex-preset-btn"
+                  onClick={() => {
+                    const raw = parseFloat((selectedSingleWallet.balances?.sol || "0").replace(/\s*SOL\s*$/i, "")) || 0;
+                    const max = Math.max(0, raw - 0.005).toFixed(4);
+                    setAmountPerWallet(max);
+                  }}
+                >
+                  MAX
+                </button>
+              </div>
             )}
           </div>
 
@@ -829,14 +846,14 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
                   className={`strat-btn ${traderMode === "distributed" ? "active" : ""}`}
                   onClick={() => setTraderMode("distributed")}
                 >
-                  <IconTarget size={12} /> Parallel (max 3)
+                  <IconTarget size={12} /> Distributed Sniper
                 </button>
                 <button
                   type="button"
                   className={`strat-btn ${traderMode === "sweep" ? "active" : ""}`}
                   onClick={() => setTraderMode("sweep")}
                 >
-                  <IconZap size={12} /> Sequential
+                  <IconZap size={12} /> Auto-Consolidate
                 </button>
               </div>
             </div>
@@ -853,14 +870,8 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
                 Trading di: <strong className="mono text-emerald">{selectedSingleWallet ? shortAddr(selectedSingleWallet.solAddress || "") : "Pilih Dompet"}</strong>
               </div>
               <div className="summary-est" style={{ fontSize: "11px", color: "var(--text-dim)" }}>
-                {tradeAction === "buy" ? (
-                  <>
-                    Buy amount: <strong className="mono" style={{ color: "#4ade80" }}>{amountPerWallet} SOL</strong>
-                    <span style={{ marginLeft: 8 }}>· tokens go directly to this wallet</span>
-                  </>
-                ) : (
-                  <>Sell the full discovered balance of mint <strong className="mono">{tokenAddress.trim() ? shortAddr(tokenAddress.trim()) : "—"}</strong></>
-                )}
+                Total Belanja: <strong className="mono" style={{ color: "#4ade80" }}>{amountPerWallet} SOL</strong>
+                <span style={{ marginLeft: 8 }}>· output account ditargetkan ke ATA wallet ini</span>
               </div>
             </div>
           ) : (
@@ -869,11 +880,7 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
                 <span className="summary-highlight mono">{activeWalletsCount}</span> Active Wallets Selected
               </div>
               <div className="summary-est">
-                {tradeAction === "buy" ? (
-                  <>Estimated total buy: <strong className="mono">{(parseFloat(amountPerWallet || "0") * activeWalletsCount).toFixed(4)} {selectedChain === "bsc" ? "BNB" : selectedChain === "sol" ? "SOL" : "ETH"}</strong></>
-                ) : (
-                  <>Selling each selected wallet's full discovered balance for this mint.</>
-                )}
+                Estimated Total: <strong className="mono">{(parseFloat(amountPerWallet || "0") * activeWalletsCount).toFixed(4)} {selectedChain === "bsc" ? "BNB" : selectedChain === "sol" ? "SOL" : "ETH"}</strong>
               </div>
             </div>
           )}
@@ -890,8 +897,8 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
                 ? "linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)"
                 : "linear-gradient(135deg, #059669 0%, #10b981 100%)",
               color: "#fff",
-              cursor: canExecute ? "pointer" : "not-allowed",
-              opacity: canExecute ? 1 : 0.6,
+              cursor: executing || activeWalletsCount === 0 || !tokenAddress.trim() || !amountPerWallet || parseFloat(amountPerWallet) <= 0 ? "not-allowed" : "pointer",
+              opacity: executing || activeWalletsCount === 0 || !tokenAddress.trim() || !amountPerWallet || parseFloat(amountPerWallet) <= 0 ? 0.6 : 1,
               padding: "0 22px",
               height: "36px",
               fontSize: "12px",
@@ -902,7 +909,7 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
             ) : (
               <>
                 <IconZap size={14} /> {scopeMode === "single"
-                  ? tradeAction === "buy" ? `Buy with ${amountPerWallet} SOL` : "Sell full token balance"
+                  ? `Swap Sekarang (${amountPerWallet} SOL)`
                   : `Execute ${fundingMode === "master" && tradeAction === "buy" ? "Master-Funded" : "Batch"} ${tradeAction === "buy" ? "Buy" : "Sell"} (${activeWalletsCount} Wallets)`}
               </>
             )}
