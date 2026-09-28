@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { useApp } from "../../context/AppContext";
 import { ChainIcon, IconTrendingUp, IconTrendingDown, IconTarget, IconZap } from "../../icons";
 import type { WalletView } from "../../lib/types/index";
-import { OFFICIAL_TOKEN_SPEC } from "../../services/officialTokenService";
 import {
   executeTokenDexBuySingle,
   executeTokenDexSellSingle,
@@ -45,7 +44,7 @@ function hasPositiveTokenBalance(token: { rawBalance?: string; balance?: string 
 }
 
 export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
-  const { wallets, selectedSweepIds, sessionToken, isAirGapped, networkSessionReady, refreshWallets, toast } = useApp();
+  const { wallets, selectedSweepIds, selectAllFunded, sessionToken, isAirGapped, networkSessionReady, refreshWallets, toast } = useApp();
   const sessionTokenRef = useRef(sessionToken);
   const isAirGappedRef = useRef(isAirGapped);
   const networkSessionReadyRef = useRef(networkSessionReady);
@@ -56,12 +55,12 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
   const [tokenAddress, setTokenAddress] = useState("");
   const [tradeAction, setTradeAction] = useState<"buy" | "sell">("buy");
   const [amountPerWallet, setAmountPerWallet] = useState("0.05");
-  const [scopeMode, setScopeMode] = useState<"single" | "batch">(wallet ? "single" : "single");
+  const [scopeMode, setScopeMode] = useState<"single" | "batch">("single");
   const [singleWalletId, setSingleWalletId] = useState<number | null>(wallet ? wallet.id : null);
   const [fundingMode, setFundingMode] = useState<"master" | "distributed">("distributed");
   const [masterWalletId, setMasterWalletId] = useState<number | null>(null);
+  const [batchExecutionOrder, setBatchExecutionOrder] = useState<"parallel" | "sequential">("parallel");
   const [slippage, setSlippage] = useState("2.5");
-  const [traderMode, setTraderMode] = useState<"distributed" | "sweep">("distributed");
   const [executing, setExecuting] = useState(false);
   const [progressMsg, setProgressMsg] = useState<string | null>(null);
   const [lastTradeReceipt, setLastTradeReceipt] = useState<TradeReceipt | null>(null);
@@ -86,10 +85,8 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
     if (scopeMode === "single") {
       return selectedSingleWallet ? [selectedSingleWallet] : [];
     }
-    if (selectedSweepIds.size > 0) {
-      return wallets.filter((w) => selectedSweepIds.has(w.id) && (selectedChain === "sol" ? !!w.solAddress : !!w.address));
-    }
-    return selectedChain === "sol" ? solWallets : wallets.filter((w) => !!w.address);
+    if (selectedSweepIds.size === 0) return [];
+    return wallets.filter((w) => selectedSweepIds.has(w.id) && (selectedChain === "sol" ? !!w.solAddress : !!w.address));
   }, [scopeMode, selectedSingleWallet, selectedSweepIds, wallets, selectedChain, solWallets]);
 
   const solCandidateMasters = useMemo(() => {
@@ -99,10 +96,12 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
         return {
           id: w.id,
           address: w.solAddress!,
+          label: w.label,
           solBalance: parseFloat(balStr) || 0,
           solFormatted: balStr.includes("SOL") ? balStr : `${balStr} SOL`,
         };
       })
+      .filter((candidate) => candidate.solBalance > 0)
       .sort((a, b) => b.solBalance - a.solBalance);
   }, [solWallets]);
 
@@ -129,6 +128,7 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
     );
   }, [compatibleTargets, tradeAction, tokenAddress, selectedChain]);
   const masterBuyMode = scopeMode === "batch" && tradeAction === "buy" && fundingMode === "master";
+  const batchRunsParallel = scopeMode === "batch" && !masterBuyMode && batchExecutionOrder === "parallel";
   const activeWalletsCount = masterBuyMode && selectedMasterWallet
     ? executionTargets.filter((target) => target.id !== selectedMasterWallet.id).length
     : executionTargets.length;
@@ -231,38 +231,35 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
 
     const totalNeededSol = (amountNum * recipientTargets.length).toFixed(3);
     const totalReservedSol = (SOLANA_BUY_RESERVE_SOL * recipientTargets.length).toFixed(3);
-    const parallelBatch = scopeMode === "batch" && traderMode === "distributed" && !isMasterBuy;
+    const parallelBatch = batchRunsParallel;
 
     const confirmed = window.confirm(
       scopeMode === "single"
-        ? `⚡ CONFIRM SINGLE-WALLET ${tradeAction.toUpperCase()} (JUPITER SWAP)\n\n` +
-          `Wallet Target: ${selectedSingleWallet?.label || `Wallet #${selectedSingleWallet?.id}`} (${shortAddr(selectedSingleWallet?.solAddress || "")})\n` +
-          `Token Mint: ${shortAddr(mint)}\n` +
-          `${tradeAction === "buy" ? `Modal Pembelian: ${amountNum} SOL (dari saldo dompet ini sendiri)` : "Aksi: Jual Token di dompet ini menjadi SOL"}\n` +
-          `${tradeAction === "buy" ? `Fee/ATA Rent Reserve: ${SOLANA_BUY_RESERVE_SOL.toFixed(3)} SOL (conservative)\n` : ""}` +
-          `${tradeAction === "buy" ? "Token hasil swap masuk langsung ke ATA dompet ini (tidak dibagi-bagi)" : "Hasil jual berupa SOL masuk kembali ke dompet ini"}\n` +
+        ? `CONFIRM SINGLE-WALLET ${tradeAction.toUpperCase()} SWAP\n\n` +
+          `Wallet: ${selectedSingleWallet?.label || `Wallet #${selectedSingleWallet?.id}`} (${shortAddr(selectedSingleWallet?.solAddress || "")})\n` +
+          `Token mint: ${shortAddr(mint)}\n` +
+          `${tradeAction === "buy" ? `Buy amount: ${amountNum} SOL from this wallet\nFee and account reserve: ${SOLANA_BUY_RESERVE_SOL.toFixed(3)} SOL\nOutput stays in this wallet.` : "Sell the selected token balance from this wallet to SOL. Proceeds return to this wallet."}\n` +
           `Slippage: ${(slippageBps / 100).toFixed(1)}%\n\n` +
-          `Lanjutkan swap langsung di dompet ini?`
+          `Continue with the swap?`
         : isMasterBuy
-        ? `👑 CONFIRM MASTER-FUNDED BATCH BUY (SUB-WALLETS 0 SOL)\n\n` +
-          `Master Funding Wallet: ${shortAddr(selectedMasterWallet.address)} (Saldo: ${selectedMasterWallet.solFormatted})\n` +
-          `Token Mint: ${shortAddr(mint)}\n` +
-          `Recipient Wallets: ${recipientTargets.length}\n` +
-          `Buy Amount per Wallet: ${amountNum} SOL\n` +
-          `Total SOL for Buys: ${totalNeededSol} SOL\n` +
-          `Fee/ATA Rent Reserve: ${totalReservedSol} SOL\n` +
-          `Estimated Master Requirement: ${(Number(totalNeededSol) + Number(totalReservedSol)).toFixed(3)} SOL\n` +
+        ? `CONFIRM MASTER-FUNDED BATCH BUY\n\n` +
+          `Funding wallet: ${shortAddr(selectedMasterWallet.address)} (${selectedMasterWallet.solFormatted})\n` +
+          `Token mint: ${shortAddr(mint)}\n` +
+          `Recipient wallets: ${recipientTargets.length}\n` +
+          `Buy amount per wallet: ${amountNum} SOL\n` +
+          `Buy capital: ${totalNeededSol} SOL\n` +
+          `Estimated fee and account reserve: ${totalReservedSol} SOL\n` +
+          `Estimated master requirement: ${(Number(totalNeededSol) + Number(totalReservedSol)).toFixed(3)} SOL\n` +
           `Slippage: ${(slippageBps / 100).toFixed(1)}%\n\n` +
-          `Dompet Master akan memotong total ${totalNeededSol} SOL + gas. Seluruh token hasil swap langsung masuk ke ATA masing-masing dompet sub-wallet.\n\n` +
-          `Execution is sequential because every swap spends from the same master wallet.\n\n` +
-          `Lanjutkan eksekusi Jupiter Batch Buy?`
-        : `🛒 CONFIRM DISTRIBUTED BATCH ${tradeAction.toUpperCase()} (JUPITER ROUTER)\n\n` +
-          `Token Mint: ${shortAddr(mint)}\n` +
-          `Wallets: ${recipientTargets.length}\n` +
-          `${tradeAction === "buy" ? `Amount per Wallet: ${amountNum} SOL\nTotal Buy Capital: ${totalNeededSol} SOL\nFee/ATA Rent Reserve: ${totalReservedSol} SOL\nEstimated Wallet Funding: ${(Number(totalNeededSol) + Number(totalReservedSol)).toFixed(3)} SOL` : "Action: Liquidate token to SOL"}\n` +
-          `Slippage: ${(slippageBps / 100).toFixed(1)}%\n\n` +
-          `Execution: ${parallelBatch ? "parallel across independent wallets (max 3 at once)" : "sequential"}\n\n` +
-          `Proceed with ${parallelBatch ? "parallel" : "sequential"} DEX swaps?`
+          `Swaps run sequentially because they share one funding wallet. Tokens are delivered to each selected recipient wallet.\n\n` +
+          `Continue with the batch buy?`
+        : `CONFIRM SELECTED-WALLET BATCH ${tradeAction.toUpperCase()}\n\n` +
+          `Token mint: ${shortAddr(mint)}\n` +
+          `Selected wallets: ${recipientTargets.length}\n` +
+          `${tradeAction === "buy" ? `Amount per wallet: ${amountNum} SOL\nTotal buy capital: ${totalNeededSol} SOL\nEstimated fee and account reserve: ${totalReservedSol} SOL\n` : "Action: sell each selected wallet's discovered token balance to SOL.\n"}` +
+          `Slippage: ${(slippageBps / 100).toFixed(1)}%\n` +
+          `Execution: ${parallelBatch ? "parallel, up to 3 wallets at a time" : "sequential"}\n\n` +
+          `Continue with the batch swap?`
     );
     if (!confirmed) return;
 
@@ -477,109 +474,128 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
   const validBuyAmount = Number.isFinite(Number(amountPerWallet)) && Number(amountPerWallet) > 0;
   const validSlippage = Number.isFinite(Number(slippage)) && Number(slippage) >= 0 && Number(slippage) <= 50;
   const canExecute = !executing && Boolean(sessionToken) && networkSessionReady && !isAirGapped && isSolana &&
-    activeWalletsCount > 0 && isValidSolAddress(tokenAddress.trim()) &&
+    activeWalletsCount > 0 && (!masterBuyMode || Boolean(selectedMasterWallet)) && isValidSolAddress(tokenAddress.trim()) &&
     (tradeAction === "sell" || validBuyAmount) && validSlippage;
 
   return (
-    <div className="dex-trader-panel">
-      {/* 1. Header Banner */}
-      <div className="dex-header">
+    <div className="dex-trader-panel dex-page">
+      <header className="dex-header">
         <div className="dex-title-box">
-          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
-            <span className="dex-badge">
-              {scopeMode === "single" ? "SINGLE WALLET DEX SWAP" : "MULTI-WALLET SWAP ENGINE"}
+          <div className="dex-eyebrow-row">
+            <span className="dex-badge">{scopeMode === "single" ? "SINGLE WALLET" : "SELECTED WALLETS"}</span>
+            <span className={`dex-badge ${isSolana ? "dex-badge-route" : "dex-badge-warning"}`}>
+              {isSolana ? "JUPITER ROUTE · NOT LIVE-TESTED" : "EVM SWAPS UNAVAILABLE"}
             </span>
-            {isSolana ? (
-              <span className="dex-badge" style={{ background: "rgba(34, 197, 94, 0.15)", color: "#4ade80", border: "1px solid rgba(34, 197, 94, 0.3)" }}>
-                JUPITER V6 ROUTING · NOT LIVE-TESTED
-              </span>
-            ) : (
-              <span className="dex-badge-warning" style={{ background: "var(--surface-3)", color: "var(--text-dim)", border: "1px solid var(--border)" }}>
-                EVM COMING SOON
-              </span>
-            )}
           </div>
-          <h3>
-            {scopeMode === "single" && selectedSingleWallet
-              ? `DEX Swap · ${selectedSingleWallet.label || `Wallet #${selectedSingleWallet.id}`}`
-              : "DEX Batch Trader"}
-          </h3>
+          <h3>DEX Trader</h3>
           <p>
             {scopeMode === "single"
-              ? `Trading langsung di dompet ${shortAddr(selectedSingleWallet?.solAddress || "")}. Token yang dibeli 100% masuk dan disimpan di dompet ini sendiri.`
-              : isSolana
-              ? "Solana DEX flow targets Jupiter v6 with vault-scoped native signing; live RPC and transaction behavior have not been verified in this build."
-              : "Multi-wallet parallel swap execution on Uniswap and PancakeSwap is currently in development."}
+              ? `Swap directly from ${selectedSingleWallet ? shortAddr(selectedSingleWallet.solAddress || "") : "your selected wallet"}. Output stays in that wallet.`
+              : "Batch swaps use only Solana wallets selected in the portfolio. Review each target before submitting."}
           </p>
         </div>
 
-        <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
-          {/* Scope Mode Selector (Single vs Batch) */}
+        <div className="dex-header-controls">
           {!isLockedToPropWallet && (
-            <div style={{ display: "flex", background: "var(--bg-card, #131722)", padding: "3px", borderRadius: "6px", border: "1px solid var(--border)" }}>
+            <div className="dex-scope-switch" role="group" aria-label="Wallet scope">
               <button
                 type="button"
-                className={`mode-pill ${scopeMode === "single" ? "active-buy" : ""}`}
-                style={{ padding: "4px 10px", fontSize: "11px", height: "auto" }}
+                className={scopeMode === "single" ? "active" : ""}
                 onClick={() => setScopeMode("single")}
+                disabled={executing}
+                aria-pressed={scopeMode === "single"}
               >
-                👤 Single Wallet (1 Dompet)
+                Single wallet
               </button>
               <button
                 type="button"
-                className={`mode-pill ${scopeMode === "batch" ? "active-buy" : ""}`}
-                style={{ padding: "4px 10px", fontSize: "11px", height: "auto" }}
+                className={scopeMode === "batch" ? "active" : ""}
                 onClick={() => setScopeMode("batch")}
+                disabled={executing}
+                aria-pressed={scopeMode === "batch"}
               >
-                👥 Multi-Wallet (Banyak)
+                Selected wallets
               </button>
             </div>
           )}
 
-          <div className="dex-mode-pills">
+          <div className="dex-mode-pills" role="group" aria-label="Swap action">
             <button
               type="button"
               className={`mode-pill ${tradeAction === "buy" ? "active-buy" : ""}`}
               onClick={() => setTradeAction("buy")}
+              disabled={executing}
+              aria-pressed={tradeAction === "buy"}
             >
-              <IconTrendingUp size={13} /> {scopeMode === "single" ? "Buy Token" : "Batch Buy"}
+              <IconTrendingUp size={13} /> Buy
             </button>
             <button
               type="button"
               className={`mode-pill ${tradeAction === "sell" ? "active-sell" : ""}`}
               onClick={() => setTradeAction("sell")}
+              disabled={executing}
+              aria-pressed={tradeAction === "sell"}
             >
-              <IconTrendingDown size={13} /> {scopeMode === "single" ? "Sell Token" : "Batch Sell"}
+              <IconTrendingDown size={13} /> Sell
             </button>
           </div>
+          <div className={`dex-session-state ${isAirGapped || !sessionToken || !networkSessionReady ? "is-blocked" : "is-ready"}`}>
+            <span />
+            {isAirGapped ? "Safe Mode" : !sessionToken ? "Vault locked" : networkSessionReady ? "Online session ready" : "Checking network gate"}
+          </div>
         </div>
-      </div>
+      </header>
 
-      {/* 2. Form Grid */}
-      <div className="dex-form-grid">
+      {scopeMode === "batch" && (
+        <div className={`dex-selection-notice ${compatibleTargets.length === 0 ? "is-empty" : ""}`}>
+          <span className="dex-selection-count">{compatibleTargets.length}</span>
+          <div>
+            <strong>{compatibleTargets.length === 1 ? "1 selected Solana wallet" : `${compatibleTargets.length} selected Solana wallets`}</strong>
+            <p>
+              {selectedSweepIds.size === 0
+                ? "Select wallets in your portfolio to enable batch trading. No wallet is selected by default."
+                : tradeAction === "sell"
+                  ? `${executionTargets.length} selected wallet${executionTargets.length === 1 ? "" : "s"} currently have a discovered balance for this mint.`
+                  : "Only selected wallets with a Solana address are included in this batch."}
+              {masterBuyMode ? " Master-funded swaps run sequentially." : batchRunsParallel ? " Batch swaps run in parallel groups of up to 3 wallets." : " Batch swaps run sequentially."}
+            </p>
+          </div>
+          {compatibleTargets.length === 0 && (
+            <button type="button" className="dex-select-funded" onClick={() => selectAllFunded("sol")} disabled={executing}>
+              Select funded Solana wallets
+            </button>
+          )}
+        </div>
+      )}
+
+      <fieldset className="dex-form-grid dex-form-fieldset" disabled={executing}>
         {/* Network Selection */}
         <div className="dex-field">
           <label className="dex-label">1. Blockchain Network</label>
           <div className="dex-chain-tabs">
             {[
-              { key: "sol", name: "Solana", dex: "Jupiter v6 (unverified)" },
-              { key: "eth", name: "Ethereum", dex: "Uniswap V3" },
-              { key: "robinhood", name: "Robinhood", dex: "Robinhood Swap" },
-              { key: "base", name: "Base", dex: "Aerodrome" },
-              { key: "arb", name: "Arbitrum", dex: "Camelot" },
-              { key: "bsc", name: "BNB Chain", dex: "PancakeSwap" },
+              { key: "sol", name: "Solana", detail: "Jupiter route · not live-tested", available: true },
+              { key: "eth", name: "Ethereum", detail: "DEX router unavailable", available: false },
+              { key: "robinhood", name: "Robinhood", detail: "DEX router unavailable", available: false },
+              { key: "base", name: "Base", detail: "DEX router unavailable", available: false },
+              { key: "arb", name: "Arbitrum", detail: "DEX router unavailable", available: false },
+              { key: "bsc", name: "BNB Chain", detail: "DEX router unavailable", available: false },
             ].map((c) => (
               <button
                 key={c.key}
                 type="button"
-                className={`dex-chain-btn ${selectedChain === c.key ? "active" : ""}`}
-                onClick={() => setSelectedChain(c.key as any)}
+                className={`dex-chain-btn ${selectedChain === c.key ? "active" : ""} ${!c.available ? "is-unavailable" : ""}`}
+                onClick={() => { if (c.available) setSelectedChain(c.key as any); }}
+                disabled={!c.available || executing}
+                aria-pressed={selectedChain === c.key}
+                title={!c.available ? `${c.name} DEX support is not available yet` : undefined}
               >
-                <ChainIcon chain={c.key} size={16} />
+                <ChainIcon chain={c.key} size={18} />
                 <div className="chain-info">
                   <span className="chain-title">{c.name}</span>
-                  <span className="chain-dex">{c.dex}</span>
+                  <span className="chain-dex">{c.detail}</span>
                 </div>
+                {!c.available && <span className="dex-coming-soon">Soon</span>}
               </button>
             ))}
           </div>
@@ -590,13 +606,15 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
           <div className="dex-wallet-selector-card">
             <div className="dex-wallet-selector-left">
               <div className="dex-wallet-selector-badge">
-                <IconTarget size={12} /> Trading Wallet
+                <IconTarget size={12} /> Trading wallet
               </div>
               <select
                 className="dex-wallet-select mono"
-                value={selectedSingleWallet?.id}
+                value={selectedSingleWallet?.id ?? ""}
                 onChange={(e) => setSingleWalletId(parseInt(e.target.value, 10))}
+                disabled={solWallets.length === 0 || executing}
               >
+                {solWallets.length === 0 && <option value="">No Solana wallets available</option>}
                 {solWallets.map((w, i) => {
                   const bal = (w.balances?.sol || "0").replace(/\s*SOL\s*$/i, "");
                   return (
@@ -610,13 +628,13 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
 
             <div className="dex-wallet-selector-right">
               <div className="dex-wallet-balance-tag">
-                <span className="dex-balance-label">Saldo</span>
+                <span className="dex-balance-label">Balance</span>
                 <span className="dex-balance-val mono">
                   {(selectedSingleWallet?.balances?.sol || "0").replace(/\s*SOL\s*$/i, "")} SOL
                 </span>
               </div>
               <span className="dex-wallet-guarantee">
-                Output ATA ditargetkan ke dompet ini
+                Swap output stays in this wallet
               </span>
             </div>
           </div>
@@ -626,123 +644,77 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
         <div className="dex-field">
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "4px", flexWrap: "wrap", gap: "6px" }}>
             <label className="dex-label" style={{ margin: 0 }}>
-              {isSolana ? "2. Target Solana SPL Token (Mint Address)" : "2. Target Token Contract / Mint Address"}
+              2. Solana SPL token mint
             </label>
-            {isSolana && tokenAddress.trim().toLowerCase().endsWith("pump") && (
-              <span style={{ fontSize: "10px", fontWeight: "700", background: "rgba(34, 197, 94, 0.15)", color: "#4ade80", border: "1px solid rgba(34, 197, 94, 0.3)", borderRadius: "4px", padding: "2px 8px" }}>
-                💊 Pump.fun Token
-              </span>
-            )}
-            {!isSolana && (
-              <button
-                type="button"
-                onClick={() => {
-                  setTokenAddress(OFFICIAL_TOKEN_SPEC.contractAddress);
-                  setSelectedChain("robinhood");
-                }}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: "5px",
-                  fontSize: "10px",
-                  fontWeight: "700",
-                  background: "rgba(204, 255, 0, 0.12)",
-                  color: "#ccff00",
-                  border: "1px solid rgba(204, 255, 0, 0.35)",
-                  borderRadius: "5px",
-                  padding: "2px 8px",
-                  cursor: "pointer",
-                }}
-              >
-                <img
-                  src={OFFICIAL_TOKEN_SPEC.logoUrl}
-                  alt={OFFICIAL_TOKEN_SPEC.name}
-                  style={{ width: "13px", height: "13px", borderRadius: "3px", objectFit: "cover" }}
-                />
-                <span>{OFFICIAL_TOKEN_SPEC.name} ({OFFICIAL_TOKEN_SPEC.symbol})</span>
-                <span style={{ fontSize: "8.5px", background: "rgba(34, 197, 94, 0.2)", color: "#4ade80", padding: "1px 4px", borderRadius: "3px" }}>
-                  VERIFIED ✓
-                </span>
-              </button>
-            )}
           </div>
           <div className="token-input-box">
             <input
               type="text"
               className="dex-input mono"
-              placeholder={isSolana ? "Paste Solana SPL Token Mint (misal: ...pump)" : "Paste token address (0x...)"}
+              placeholder="Paste the Solana SPL token mint address"
               value={tokenAddress}
               onChange={(e) => setTokenAddress(e.target.value)}
+              disabled={!isSolana || executing}
             />
             {tokenAddress && (
-              <button type="button" className="btn-clear-input" onClick={() => setTokenAddress("")}>
+              <button type="button" className="btn-clear-input" onClick={() => setTokenAddress("")} disabled={!isSolana || executing}>
                 ×
               </button>
             )}
           </div>
         </div>
 
-        {/* Funding Mode Options (for Solana Batch Buy only) */}
+        {/* Batch buy funding */}
         {isSolana && tradeAction === "buy" && scopeMode === "batch" && (
-          <div className="dex-field" style={{ gridColumn: "1 / -1", padding: "10px 14px", background: "rgba(245, 158, 11, 0.05)", borderRadius: "6px", border: "1px solid rgba(245, 158, 11, 0.25)" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: "11px", fontWeight: 700, color: "#fbbf24", textTransform: "uppercase" }}>
-                Sumber Modal Pembelian SOL:
-              </span>
-              <div style={{ display: "flex", gap: 6 }}>
+          <div className="dex-field dex-funding-panel">
+            <div className="dex-funding-heading">
+              <div>
+                <label className="dex-label">SOL buy funding</label>
+                <p>Choose where the SOL for each selected wallet’s buy comes from.</p>
+              </div>
+              <div className="dex-funding-toggle" role="group" aria-label="Batch buy funding source">
                 <button
                   type="button"
-                  className={`mode-pill ${fundingMode === "master" ? "active-buy" : ""}`}
-                  style={{
-                    padding: "3px 10px",
-                    fontSize: "11px",
-                    background: fundingMode === "master" ? "rgba(245, 158, 11, 0.25)" : undefined,
-                    borderColor: fundingMode === "master" ? "#f59e0b" : undefined,
-                    color: fundingMode === "master" ? "#fbbf24" : undefined,
-                  }}
+                  className={fundingMode === "master" ? "active" : ""}
                   onClick={() => setFundingMode("master")}
+                  disabled={executing || solCandidateMasters.length === 0}
+                  aria-pressed={fundingMode === "master"}
                 >
-                  👑 1 Dompet Master (Sub-wallet 0 SOL)
+                  One master wallet
                 </button>
                 <button
                   type="button"
-                  className={`mode-pill ${fundingMode === "distributed" ? "active-buy" : ""}`}
-                  style={{
-                    padding: "3px 10px",
-                    fontSize: "11px",
-                    background: fundingMode === "distributed" ? "rgba(59, 130, 246, 0.25)" : undefined,
-                    borderColor: fundingMode === "distributed" ? "#3b82f6" : undefined,
-                    color: fundingMode === "distributed" ? "#60a5fa" : undefined,
-                  }}
+                  className={fundingMode === "distributed" ? "active" : ""}
                   onClick={() => setFundingMode("distributed")}
+                  disabled={executing}
+                  aria-pressed={fundingMode === "distributed"}
                 >
-                  👥 Tiap Dompet Sendiri (Distributed)
+                  Each wallet pays for its own buy
                 </button>
               </div>
             </div>
 
             {fundingMode === "master" && (
-              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                <label style={{ fontSize: "11px", color: "var(--text-dim)" }}>Pilih Dompet Master:</label>
+              <div className="dex-master-funding-row">
+                <label className="dex-label" htmlFor="dex-master-funder">Funding wallet</label>
                 <select
+                  id="dex-master-funder"
                   className="dex-input mono"
-                  style={{
-                    padding: "4px 8px",
-                    fontSize: "11px",
-                    width: 320,
-                    cursor: "pointer",
-                  }}
-                  value={selectedMasterWallet?.id}
-                  onChange={(e) => setMasterWalletId(parseInt(e.target.value, 10))}
+                  value={selectedMasterWallet?.id ?? ""}
+                  onChange={(event) => setMasterWalletId(parseInt(event.target.value, 10))}
+                  disabled={solCandidateMasters.length === 0 || executing}
                 >
-                  {solCandidateMasters.map((c, i) => (
-                    <option key={c.id} value={c.id}>
-                      Wallet #{i + 1} ({shortAddr(c.address)}) — {c.solFormatted} {i === 0 ? "★ Primary Master Funder" : ""}
+                  {solCandidateMasters.map((candidate, index) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.label || `Wallet #${index + 1}`} · {shortAddr(candidate.address)} · {candidate.solFormatted}
                     </option>
                   ))}
+                  {solCandidateMasters.length === 0 && <option value="">No funded Solana wallets found</option>}
                 </select>
-                <span style={{ fontSize: "11px", color: "#fbbf24" }}>
-                  ✓ Dompet Master membayar {(activeWalletsCount * (parseFloat(amountPerWallet) || 0.05)).toFixed(3)} SOL untuk {activeWalletsCount} dompet. Sub-wallet butuh 0 SOL!
+                <span className="dex-master-funding-hint">
+                  {solCandidateMasters.length === 0
+                    ? "A funded Solana wallet is required for master-funded buys."
+                    : `Estimated buy capital: ${(activeWalletsCount * (parseFloat(amountPerWallet) || 0.05)).toFixed(3)} SOL, plus network and account reserves.`}
                 </span>
               </div>
             )}
@@ -750,15 +722,16 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
         )}
 
         {/* Trade Configuration */}
-        <div className="dex-config-row">
+        <div className={`dex-config-row ${tradeAction === "sell" ? "is-sell" : ""}`}>
+          {tradeAction === "buy" && (
           <div className="dex-field flex-1">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "2px" }}>
               <label className="dex-label" style={{ margin: 0 }}>
-                {scopeMode === "single" ? "3. Buy Amount (SOL)" : "3. Amount per Wallet"}
+                {scopeMode === "single" ? "3. Buy amount" : "3. Buy amount per wallet"}
               </label>
               {scopeMode === "single" && selectedSingleWallet && (
                 <span style={{ fontSize: "10px", color: "var(--text-dim)" }}>
-                  Saldo: <b style={{ color: "var(--text-main)" }}>{(selectedSingleWallet.balances?.sol || "0").replace(/\s*SOL\s*$/i, "")} SOL</b>
+                  Balance: <b style={{ color: "var(--text-main)" }}>{(selectedSingleWallet.balances?.sol || "0").replace(/\s*SOL\s*$/i, "")} SOL</b>
                 </span>
               )}
             </div>
@@ -769,6 +742,7 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
                 className="dex-input mono"
                 value={amountPerWallet}
                 onChange={(e) => setAmountPerWallet(e.target.value)}
+                disabled={executing}
               />
               <span className="amount-unit">{selectedChain === "bsc" ? "BNB" : selectedChain === "sol" ? "SOL" : "ETH"}</span>
             </div>
@@ -811,6 +785,7 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
               </div>
             )}
           </div>
+          )}
 
           <div className="dex-field w-32">
             <label className="dex-label" style={{ marginBottom: "2px" }}>Slippage (%)</label>
@@ -835,96 +810,98 @@ export function DexBatchTrader({ wallet }: { wallet?: WalletView }) {
               </div>
             )}
           </div>
-
-          {/* Strategy Pills only shown in Batch mode */}
-          {scopeMode === "batch" && (
-            <div className="dex-field flex-1">
-              <label className="dex-label" style={{ marginBottom: "2px" }}>Execution Strategy</label>
-              <div className="strategy-pills">
-                <button
-                  type="button"
-                  className={`strat-btn ${traderMode === "distributed" ? "active" : ""}`}
-                  onClick={() => setTraderMode("distributed")}
-                >
-                  <IconTarget size={12} /> Distributed Sniper
-                </button>
-                <button
-                  type="button"
-                  className={`strat-btn ${traderMode === "sweep" ? "active" : ""}`}
-                  onClick={() => setTraderMode("sweep")}
-                >
-                  <IconZap size={12} /> Auto-Consolidate
-                </button>
-              </div>
-            </div>
-          )}
         </div>
-      </div>
 
-      {/* 3. Execution Summary Bar */}
-      <div className="dex-summary-bar">
-        <div className="summary-left">
+        {scopeMode === "batch" && (
+          <div className={`dex-execution-order ${masterBuyMode ? "is-forced" : ""}`}>
+            <div>
+              <strong>Batch execution</strong>
+              <p>{masterBuyMode ? "One funding wallet is shared, so swaps run one at a time." : "Choose how selected wallet swaps are submitted."}</p>
+            </div>
+            {masterBuyMode ? (
+              <span className="dex-execution-required">Sequential · required</span>
+            ) : (
+              <div className="dex-execution-toggle" role="group" aria-label="Batch execution order">
+                <button
+                  type="button"
+                  className={batchExecutionOrder === "parallel" ? "active" : ""}
+                  onClick={() => setBatchExecutionOrder("parallel")}
+                  disabled={executing}
+                  aria-pressed={batchExecutionOrder === "parallel"}
+                >
+                  Parallel <small>up to 3</small>
+                </button>
+                <button
+                  type="button"
+                  className={batchExecutionOrder === "sequential" ? "active" : ""}
+                  onClick={() => setBatchExecutionOrder("sequential")}
+                  disabled={executing}
+                  aria-pressed={batchExecutionOrder === "sequential"}
+                >
+                  Sequential
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+      </fieldset>
+
+      <footer className="dex-summary-bar">
+        <div className="dex-summary-copy">
           {scopeMode === "single" ? (
-            <div>
-              <div className="summary-wallets">
-                Trading di: <strong className="mono text-emerald">{selectedSingleWallet ? shortAddr(selectedSingleWallet.solAddress || "") : "Pilih Dompet"}</strong>
+            <>
+              <div className="dex-summary-title">
+                Trading wallet <strong className="mono">{selectedSingleWallet ? shortAddr(selectedSingleWallet.solAddress || "") : "Select a wallet"}</strong>
               </div>
-              <div className="summary-est" style={{ fontSize: "11px", color: "var(--text-dim)" }}>
-                Total Belanja: <strong className="mono" style={{ color: "#4ade80" }}>{amountPerWallet} SOL</strong>
-                <span style={{ marginLeft: 8 }}>· output account ditargetkan ke ATA wallet ini</span>
+              <div className="dex-summary-detail">
+                {tradeAction === "buy"
+                  ? <>Buy amount: <strong className="mono">{amountPerWallet} SOL</strong> · Output stays in this wallet.</>
+                  : <>Sell the selected token balance to SOL. Proceeds return to this wallet.</>}
               </div>
-            </div>
+            </>
           ) : (
-            <div>
-              <div className="summary-wallets">
-                <span className="summary-highlight mono">{activeWalletsCount}</span> Active Wallets Selected
+            <>
+              <div className="dex-summary-title">
+                <strong className="mono">{activeWalletsCount}</strong> eligible selected wallet{activeWalletsCount === 1 ? "" : "s"}
               </div>
-              <div className="summary-est">
-                Estimated Total: <strong className="mono">{(parseFloat(amountPerWallet || "0") * activeWalletsCount).toFixed(4)} {selectedChain === "bsc" ? "BNB" : selectedChain === "sol" ? "SOL" : "ETH"}</strong>
+              <div className="dex-summary-detail">
+                {tradeAction === "buy" ? (
+                  <>Estimated buy input: <strong className="mono">{(parseFloat(amountPerWallet || "0") * activeWalletsCount).toFixed(4)} SOL</strong> total</>
+                ) : (
+                  <>{executionTargets.length} selected wallet{executionTargets.length === 1 ? "" : "s"} with a discovered balance for this mint</>
+                )}
+                <span className="dex-execution-note">
+                  {masterBuyMode ? "Master-funded swaps run sequentially." : batchRunsParallel ? "Parallel batches of up to 3." : "Sequential execution."}
+                </span>
               </div>
-            </div>
+            </>
           )}
         </div>
 
         {isSolana ? (
           <button
             type="button"
-            className="btn-execute-trade"
+            className={`btn-execute-trade ${tradeAction === "sell" ? "is-sell" : "is-buy"}`}
             onClick={handleExecute}
             disabled={!canExecute}
-            style={{
-              background: tradeAction === "buy"
-                ? "linear-gradient(135deg, #2563eb 0%, #3b82f6 100%)"
-                : "linear-gradient(135deg, #059669 0%, #10b981 100%)",
-              color: "#fff",
-              cursor: executing || activeWalletsCount === 0 || !tokenAddress.trim() || !amountPerWallet || parseFloat(amountPerWallet) <= 0 ? "not-allowed" : "pointer",
-              opacity: executing || activeWalletsCount === 0 || !tokenAddress.trim() || !amountPerWallet || parseFloat(amountPerWallet) <= 0 ? 0.6 : 1,
-              padding: "0 22px",
-              height: "36px",
-              fontSize: "12px",
-            }}
           >
             {executing ? (
-              progressMsg || "Executing Swaps..."
+              progressMsg || "Executing swap…"
             ) : (
               <>
-                <IconZap size={14} /> {scopeMode === "single"
-                  ? `Swap Sekarang (${amountPerWallet} SOL)`
-                  : `Execute ${fundingMode === "master" && tradeAction === "buy" ? "Master-Funded" : "Batch"} ${tradeAction === "buy" ? "Buy" : "Sell"} (${activeWalletsCount} Wallets)`}
+                <IconZap size={14} />
+                {scopeMode === "single"
+                  ? tradeAction === "buy" ? `Buy · ${amountPerWallet} SOL` : "Sell token to SOL"
+                  : `${masterBuyMode ? "Master-funded " : "Batch "}${tradeAction} · ${activeWalletsCount} wallet${activeWalletsCount === 1 ? "" : "s"}`}
               </>
             )}
           </button>
         ) : (
-          <button
-            type="button"
-            className="btn-execute-trade btn-disabled"
-            disabled={true}
-            style={{ opacity: 0.6, cursor: "not-allowed" }}
-          >
-            <IconZap size={13} /> On-Chain Router in Development
+          <button type="button" className="btn-execute-trade btn-disabled" disabled>
+            <IconZap size={13} /> EVM DEX swaps are not available yet
           </button>
         )}
-      </div>
+      </footer>
 
       {/* 4. Trade Receipt & Verification Card */}
       {lastTradeReceipt && (
