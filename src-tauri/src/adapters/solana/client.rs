@@ -273,7 +273,7 @@ pub async fn get_solana_account_details(
 pub async fn get_solana_account_details_with_gate(
     rpcs: &[&str],
     address: &str,
-    network_gate: &(dyn Fn() -> Result<(), String> + Send + Sync),
+    network_gate: &crate::adapters::network::NetworkAccessGate,
 ) -> Result<SolanaAccountDetails, String> {
     network_gate()?;
     let client = shared_client();
@@ -441,24 +441,21 @@ pub async fn get_solana_account_details_with_gate(
             }
         }
     }
+    }
 
     Err(last_err)
 }
 
 /// Returns the newest confirmed transaction signatures for an address, optionally continuing
 /// before a previously returned signature. The caller enforces vault-session and Safe Mode gates.
-pub async fn get_solana_transaction_history<F>(
+pub async fn get_solana_transaction_history(
     rpcs: &[&str],
     address: &str,
     before: Option<&str>,
     limit: usize,
-    verify_network_access: F,
-) -> Result<Vec<SolanaTransactionSignature>, String>
-where
-    F: Fn() -> Result<(), String> + Send + Sync,
-{
+    network_gate: &crate::adapters::network::NetworkAccessGate,
+) -> Result<Vec<SolanaTransactionSignature>, String> {
     let client = shared_client();
-    let network_gate: &crate::adapters::network::NetworkAccessGate = &verify_network_access;
     let limit = limit.clamp(1, 100);
     let mut last_err = "Failed to fetch Solana transaction history from RPC nodes".to_string();
 
@@ -517,12 +514,12 @@ where
         network_gate()?;
         let data = match serde_json::from_slice::<serde_json::Value>(&body) {
             Ok(data) => data,
-            Err(error) => {
+            Err(_) => {
                 last_err = "Solana RPC returned invalid JSON".to_string();
                 continue;
             }
         };
-        if let Some(error) = data.get("error") {
+        if data.get("error").is_some() {
             last_err = "Solana RPC rejected the history request".to_string();
             continue;
         }
@@ -532,7 +529,7 @@ where
         };
         match parse_solana_signature_entries(entries) {
             Ok(transactions) => {
-                verify_network_access()?;
+                network_gate()?;
                 return Ok(transactions);
             }
             Err(error) => last_err = format!("Invalid Solana signature response: {error}"),

@@ -863,6 +863,7 @@ async fn resolve_solana_token_metas_with_gate(
         };
         (mint, metadata)
     }
+    })
     .buffer_unordered(8)
     .collect::<Vec<_>>()
     .await;

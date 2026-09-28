@@ -312,7 +312,7 @@ pub async fn get_account_nonce_and_balance(
                 )
                 .await
             {
-                network_gate.as_ref()?;
+                network_gate.as_ref()()?;
                 let lamports: u64 = lamports_str.parse().unwrap_or(0);
                 let sol_amt = (lamports as f64) / 1e9;
                 let formatted = format!("{:.6} SOL", sol_amt);
@@ -324,7 +324,7 @@ pub async fn get_account_nonce_and_balance(
                 });
             }
         }
-        network_gate.as_ref()?;
+        network_gate.as_ref()()?;
         return Err(last_error);
     }
 
@@ -555,11 +555,11 @@ pub async fn get_solana_account_details(
         .iter()
         .find(|c| c.key == "sol")
         .ok_or_else(|| "Solana chain not found".to_string())?;
-    let network_gate = || verify_authenticated_network_access(&session_token);
+    let network_gate = authenticated_network_gate(&session_token);
     crate::adapters::solana::client::get_solana_account_details_with_gate(
         chain.rpcs,
         &address,
-        &network_gate,
+        network_gate.as_ref(),
     )
     .await
 }
@@ -932,12 +932,13 @@ pub async fn get_solana_transaction_history(
         .iter()
         .find(|chain| chain.key == "sol")
         .ok_or_else(|| "Solana chain not found".to_string())?;
+    let network_gate = authenticated_network_gate(&session_token);
     crate::adapters::solana::client::get_solana_transaction_history(
         chain.rpcs,
         &address,
         before.as_deref(),
         limit.unwrap_or(20).clamp(1, 100),
-        || verify_authenticated_network_access(&session_token),
+        network_gate.as_ref(),
     )
     .await
 }
@@ -1198,7 +1199,7 @@ pub async fn scan_phrase_on_the_fly(
     // 1. Scan Bitcoin if address present
     let mut btc_balance_str: Option<String> = None;
     if let Some(ref btc_addr) = creds.btc_address {
-        network_gate.as_ref()?;
+        network_gate.as_ref()()?;
         let btc_rpcs = &["https://mempool.space/api", "https://blockstream.info/api"];
         if let Ok(res) =
             crate::core::scanner::bitcoin::scan_bitcoin_for_wallet_with_gate(
@@ -2297,7 +2298,7 @@ pub async fn vault_updater_check(
         .map_err(|e| format!("Failed to initialize updater: {e}"))?;
     let update = crate::adapters::network::await_with_gate(
         async { updater.check().await.map_err(|error| format!("Failed to check for updates: {error}")) },
-        &network_gate,
+        network_gate.as_ref(),
     )
     .await?;
 
@@ -2330,7 +2331,7 @@ pub async fn vault_updater_download_and_install(
         .map_err(|e| format!("Failed to initialize updater: {e}"))?;
     let update = crate::adapters::network::await_with_gate(
         async { updater.check().await.map_err(|error| format!("Failed to check for updates: {error}")) },
-        &network_gate,
+        network_gate.as_ref(),
     )
     .await?
     .ok_or_else(|| "No update available to download and install.".to_string())?;
@@ -2350,7 +2351,7 @@ pub async fn vault_updater_download_and_install(
     );
     crate::adapters::network::await_with_gate(
         async { download.await.map_err(|error| format!("Failed to download and install update: {error}")) },
-        &network_gate,
+        network_gate.as_ref(),
     )
     .await?;
 
@@ -2473,7 +2474,7 @@ pub async fn ping_rpc_node(
                 .map_err(|error| format!("RPC hostname lookup failed: {error}"))?;
                 Ok(addresses.collect::<Vec<_>>())
             },
-            &network_gate,
+            network_gate.as_ref(),
         )
         .await?;
         let public_address = resolved
@@ -2500,7 +2501,7 @@ pub async fn ping_rpc_node(
             .send();
         let res = crate::adapters::network::await_with_gate(
             async { request.await.map_err(crate::adapters::network::redact_reqwest_error) },
-            &network_gate,
+            network_gate.as_ref(),
         )
         .await;
 
@@ -2512,7 +2513,7 @@ pub async fn ping_rpc_node(
                     let bytes = crate::adapters::network::read_response_limited(
                         &mut resp,
                         16_384,
-                        &network_gate,
+                        network_gate.as_ref(),
                     )
                     .await?;
                     let height = String::from_utf8(bytes)
@@ -2546,14 +2547,14 @@ pub async fn ping_rpc_node(
         });
 
         let request = client
-            .post(&parsed_url)
+            .post(parsed_url.as_str())
             .header("Content-Type", "application/json")
             .header("User-Agent", "Plurivex/1.0")
             .json(&payload)
             .send();
         let res = crate::adapters::network::await_with_gate(
             async { request.await.map_err(crate::adapters::network::redact_reqwest_error) },
-            &network_gate,
+            network_gate.as_ref(),
         )
         .await;
 
@@ -2565,7 +2566,7 @@ pub async fn ping_rpc_node(
                     let bytes = crate::adapters::network::read_response_limited(
                         &mut resp,
                         64_000,
-                        &network_gate,
+                        network_gate.as_ref(),
                     )
                     .await?;
                     let body = String::from_utf8(bytes)
@@ -2601,14 +2602,14 @@ pub async fn ping_rpc_node(
         });
 
         let request = client
-            .post(&parsed_url)
+            .post(parsed_url.as_str())
             .header("Content-Type", "application/json")
             .header("User-Agent", "Mozilla/5.0")
             .json(&payload)
             .send();
         let res = crate::adapters::network::await_with_gate(
             async { request.await.map_err(crate::adapters::network::redact_reqwest_error) },
-            &network_gate,
+            network_gate.as_ref(),
         )
         .await;
 
@@ -2620,7 +2621,7 @@ pub async fn ping_rpc_node(
                     let bytes = crate::adapters::network::read_response_limited(
                         &mut resp,
                         64_000,
-                        &network_gate,
+                        network_gate.as_ref(),
                     )
                     .await?;
                     let body = String::from_utf8(bytes)
