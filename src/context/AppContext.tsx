@@ -5,6 +5,7 @@ import type { ToastMessage, ToastType } from "./types/toast";
 import { hasFundsForWallet, totalBalanceForWallet } from "../lib/chains/chains";
 import { clearSweptBalanceDb } from "../lib/db/db";
 import { solanaWs } from "../services/solanaWsService";
+import { robinhoodWs } from "../services/robinhoodWsService";
 import { useToastState } from "./hooks/useToastState";
 import { useWalletFilters } from "./hooks/useWalletFilters";
 import { useWalletOperations, type ExportOptions } from "./hooks/useWalletOperations";
@@ -50,7 +51,7 @@ interface AppContextValue {
   ) => Promise<{ added: number; skipped: number }>;
   scanAll: () => Promise<void>;
   scanOne: (id: number) => Promise<void>;
-  refreshWallets: (targets: WalletView[], chainKey?: string) => Promise<void>;
+  refreshWallets: (targets: WalletView[], chainKey?: string, excludeChainKey?: string) => Promise<void>;
   removeWallet: (id: number, password: string) => Promise<{ success: boolean; error?: string }>;
   resetAllWallets: (password: string) => Promise<{ success: boolean; error?: string }>;
   exportWallets: (format: "txt" | "csv") => Promise<void>;
@@ -143,6 +144,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       .join(","),
     [selectedSolWallets],
   );
+  const selectedRobinhoodWalletKey = useMemo(
+    () => selectedWallets
+      .filter((wallet) => Boolean(wallet.address))
+      .map((wallet) => `${wallet.id}:${wallet.address!.toLowerCase()}`)
+      .sort()
+      .join(","),
+    [selectedWallets],
+  );
 
   // Reactive Multi-Chain Address Backfill (Native Scoped Rust Execution)
   useEffect(() => {
@@ -233,17 +242,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [auth.screen, auth.sessionToken, scanner.networkGateReady, nativeOnlineSessionReady, scanner.isAirGapped, pricing.markStale, pricing.refreshPrices]);
 
   // Keep all network transports behind the same explicit online + unlocked gate.
-  // The dashboard only opens subscriptions for wallets checked in the sidebar.
+  // Only wallets selected in the sidebar are subscribed for real-time updates.
   useEffect(() => {
     const appIsOnline = auth.screen === "app" && Boolean(auth.sessionToken) && scanner.networkGateReady && nativeOnlineSessionReady && !scanner.isAirGapped;
     const selectedSolAddresses = selectedSolAddressKey ? selectedSolAddressKey.split(",") : [];
     solanaWs.setWatchedAddresses(appIsOnline ? selectedSolAddresses : []);
     solanaWs.setEnabled(appIsOnline && selectedSolAddresses.length > 0, appIsOnline ? auth.sessionToken : null);
-  }, [auth.screen, auth.sessionToken, scanner.networkGateReady, nativeOnlineSessionReady, scanner.isAirGapped, selectedSolAddressKey]);
+    robinhoodWs.setEnabled(appIsOnline && selectedRobinhoodWalletKey.length > 0, appIsOnline ? auth.sessionToken : null);
+  }, [auth.screen, auth.sessionToken, scanner.networkGateReady, nativeOnlineSessionReady, scanner.isAirGapped, selectedSolAddressKey, selectedRobinhoodWalletKey]);
 
   useEffect(() => () => {
     solanaWs.setWatchedAddresses([]);
     solanaWs.setEnabled(false);
+    robinhoodWs.setEnabled(false);
   }, []);
 
   // Subscribe once; address and wallet selection lookups use refs so reloading
@@ -295,9 +306,56 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
   }, [walletOps.setWallets]);
 
-  // Recovery path: refresh selected wallets after selection changes and poll every
-  // 45 seconds. This recovers missed Solana WSS notices and is the update path for
-  // Robinhood Chain, whose credentialed renderer WebSocket provider is disabled.
+  // Robinhood newHeads is the primary real-time trigger. Coalesce very fast block
+  // bursts and run at most one chain-scoped wallet refresh at a time; the existing
+  // native scanner persists the resulting native and token balances to SQLite.
+  useEffect(() => {
+    const appIsOnline = auth.screen === "app" && Boolean(auth.sessionToken) &&
+      scanner.networkGateReady && nativeOnlineSessionReady && !scanner.isAirGapped;
+    if (!appIsOnline || !selectedRobinhoodWalletKey) return;
+
+    const minimumRefreshIntervalMs = 1_500;
+    let refreshTimer: number | null = null;
+    let lastRefreshAt = 0;
+    let refreshInProgress = false;
+    let pendingBlock = false;
+
+    const scheduleRefresh = () => {
+      pendingBlock = true;
+      if (refreshTimer !== null || refreshInProgress) return;
+      const delay = Math.max(0, minimumRefreshIntervalMs - (Date.now() - lastRefreshAt));
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = null;
+        if (!pendingBlock) return;
+        pendingBlock = false;
+        const targets = walletsRef.current.filter(
+          (wallet) => selectedIdsRef.current.has(wallet.id) && Boolean(wallet.address),
+        );
+        if (targets.length === 0) return;
+
+        refreshInProgress = true;
+        lastRefreshAt = Date.now();
+        void refreshWalletsRef.current(targets, "robinhood")
+          .catch((error) => console.warn("[Robinhood live sync] Refresh failed:", error))
+          .finally(() => {
+            refreshInProgress = false;
+            if (pendingBlock) scheduleRefresh();
+          });
+      }, delay);
+    };
+
+    const unsubscribeBlocks = robinhoodWs.subscribeBlocks(scheduleRefresh);
+    return () => {
+      unsubscribeBlocks();
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+      refreshTimer = null;
+      pendingBlock = false;
+    };
+  }, [auth.screen, auth.sessionToken, scanner.networkGateReady, nativeOnlineSessionReady, scanner.isAirGapped, selectedRobinhoodWalletKey]);
+
+  // Bootstrap selected balances and recover non-WSS chains every 45 seconds.
+  // While Robinhood WSS is connected, the recovery pass excludes Robinhood; an
+  // HTTP Robinhood scan is included only when its WebSocket is unavailable.
   useEffect(() => {
     if (
       auth.screen !== "app" || !auth.sessionToken || scanner.isAirGapped ||
@@ -310,7 +368,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const targets = walletsRef.current.filter(
         (wallet) => filters.selectedSweepIds.has(wallet.id),
       );
-      if (targets.length > 0) void refreshWalletsRef.current(targets);
+      if (targets.length === 0) return;
+      const robinhoodWssIsLive = robinhoodWs.getStatus() === "connected";
+      // While WSS is healthy, keep the periodic cross-chain recovery scan off
+      // Robinhood. Re-enable that HTTP scan only if the subscription is down.
+      void refreshWalletsRef.current(
+        targets,
+        undefined,
+        robinhoodWssIsLive ? "robinhood" : undefined,
+      );
     };
 
     refreshSelectedWallets();

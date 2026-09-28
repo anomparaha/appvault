@@ -189,6 +189,8 @@ pub async fn execute_scan_balances(
     wallet_id: Option<i64>,
     wallet_ids: Option<Vec<i64>>,
     chain_key: Option<String>,
+    exclude_chain_key: Option<String>,
+    robinhood_rpc_override: Option<zeroize::Zeroizing<String>>,
     network_gate: NetworkAccessGate,
 ) -> Result<ScanSummary, String> {
     let _scan_guard = SCAN_SERIALIZER
@@ -306,12 +308,17 @@ pub async fn execute_scan_balances(
     }
 
     let client = crate::adapters::evm::client::shared_client();
-    let semaphore = Arc::new(Semaphore::new(16));
+    // Keep event-driven Robinhood scans below the generic multi-chain
+    // concurrency ceiling to reduce request bursts during block updates.
+    let max_concurrent_wallet_scans = if chain_key.as_deref() == Some("robinhood") { 4 } else { 16 };
+    let semaphore = Arc::new(Semaphore::new(max_concurrent_wallet_scans));
     let mut tasks = Vec::new();
 
     for (w_id, evm_addr, sol_addr, btc_addr) in wallets {
         for chain in CHAINS {
-            if chain_key.as_deref().is_some_and(|requested| requested != chain.key) {
+            if chain_key.as_deref().is_some_and(|requested| requested != chain.key) ||
+                exclude_chain_key.as_deref().is_some_and(|excluded| excluded == chain.key)
+            {
                 continue;
             }
             let has_addr = match chain.kind {
@@ -333,6 +340,13 @@ pub async fn execute_scan_balances(
                 .cloned()
                 .unwrap_or_default();
             let c_network_gate = network_gate.clone();
+            let c_robinhood_rpc = if chain.key == "robinhood" {
+                robinhood_rpc_override
+                    .as_ref()
+                    .map(|rpc| zeroize::Zeroizing::new(rpc.as_str().to_string()))
+            } else {
+                None
+            };
 
             tasks.push(async move {
                 let _permit = permit.acquire().await.ok();
@@ -354,12 +368,18 @@ pub async fn execute_scan_balances(
                         Err("No bitcoin address".to_string())
                     }
                 } else if let Some(ref addr) = c_evm {
+                    let override_refs = c_robinhood_rpc
+                        .as_ref()
+                        .map(|rpc| vec![rpc.as_str()]);
+                    let rpc_endpoints = override_refs
+                        .as_deref()
+                        .unwrap_or(chain.rpcs);
                     evm::scan_evm_for_wallet_with_gate(
                         &c_client,
                         addr,
                         chain.key,
                         chain.symbol,
-                        chain.rpcs,
+                        rpc_endpoints,
                         chain.tokens,
                         c_existing_tokens,
                         w_id,

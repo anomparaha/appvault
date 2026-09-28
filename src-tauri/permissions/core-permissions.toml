@@ -97,6 +97,16 @@ description = "Allow controlling Safe Mode and checking a read-only authenticate
 commands.allow = ["set_air_gapped_mode", "get_air_gapped_mode", "verify_online_network_access"]
 
 [[permission]]
+identifier = "allow-robinhood-ws-config"
+description = "Allow vault-encrypted configuration and session-gated Robinhood WSS endpoint access"
+commands.allow = [
+  "has_robinhood_wss_api_key",
+  "set_robinhood_wss_api_key",
+  "clear_robinhood_wss_api_key",
+  "get_robinhood_wss_endpoint_scoped"
+]
+
+[[permission]]
 identifier = "allow-recovery-session"
 description = "Allow running, pausing, resuming, and querying persistent recovery sessions"
 commands.allow = [

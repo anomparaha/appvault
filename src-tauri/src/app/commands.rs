@@ -4,6 +4,7 @@ use crate::core::scanner::{execute_scan_balances, ChainKind, ScanSummary, CHAINS
 use crate::core::wallets::import::{scan_directory_native as core_scan_dir, NativeScanResult};
 use std::sync::atomic::{AtomicBool, Ordering};
 use base64::Engine;
+use rusqlite::OptionalExtension;
 
 pub static AIR_GAPPED_MODE: AtomicBool = AtomicBool::new(true);
 
@@ -26,6 +27,128 @@ pub fn verify_online_network_access(session_token: String) -> Result<(), String>
         return Err("Action denied: Active unlocked vault session required.".to_string());
     }
     verify_air_gap_inactive()
+}
+
+const ROBINHOOD_ZAN_API_KEY_META_KEY: &str = "rpc.robinhood.zan_api_key.v1";
+
+fn is_valid_zan_api_key(api_key: &str) -> bool {
+    (16..=256).contains(&api_key.len())
+        && api_key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+}
+
+fn load_robinhood_zan_api_key(
+    app: &tauri::AppHandle,
+    session_token: &str,
+) -> Result<Option<zeroize::Zeroizing<String>>, String> {
+    crate::db::commands::verify_session_authenticated(session_token)?;
+    let conn = crate::db::commands::get_connection(app)?;
+    let encrypted: Option<String> = conn
+        .query_row(
+            "SELECT value FROM meta WHERE key = ?1",
+            rusqlite::params![ROBINHOOD_ZAN_API_KEY_META_KEY],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| format!("Failed to read Robinhood WSS configuration: {error}"))?;
+    let Some(encrypted) = encrypted else {
+        return Ok(None);
+    };
+
+    let master_key = crate::core::security::session::get_session_manager()
+        .get_master_key(session_token)?;
+    let api_key = crate::core::security::crypto::decrypt_vault_zeroizing(
+        &encrypted,
+        master_key.as_str(),
+    )?;
+    if !is_valid_zan_api_key(api_key.as_str()) {
+        return Err("Stored ZAN API key is invalid; save the key again.".to_string());
+    }
+    Ok(Some(api_key))
+}
+
+#[tauri::command]
+pub fn has_robinhood_wss_api_key(
+    app: tauri::AppHandle,
+    session_token: String,
+) -> Result<bool, String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
+    let conn = crate::db::commands::get_connection(&app)?;
+    let exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM meta WHERE key = ?1)",
+            rusqlite::params![ROBINHOOD_ZAN_API_KEY_META_KEY],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to read Robinhood WSS configuration: {error}"))?;
+    Ok(exists)
+}
+
+#[tauri::command]
+pub fn set_robinhood_wss_api_key(
+    app: tauri::AppHandle,
+    session_token: String,
+    api_key: String,
+) -> Result<(), String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
+
+    // Keep the incoming IPC value zeroizing and never return or log it. The
+    // credential is encrypted with the unlocked vault master key before storage.
+    let mut raw_api_key = zeroize::Zeroizing::new(api_key);
+    let normalized = raw_api_key.trim().to_string();
+    crate::core::security::memory::secure_zero_string(&mut raw_api_key);
+    let api_key = zeroize::Zeroizing::new(normalized);
+    if !is_valid_zan_api_key(api_key.as_str()) {
+        return Err("Invalid ZAN API key format".to_string());
+    }
+
+    let master_key = crate::core::security::session::get_session_manager()
+        .get_master_key(&session_token)?;
+    let encrypted = crate::core::security::crypto::encrypt_vault(
+        api_key.as_str(),
+        master_key.as_str(),
+    )?;
+    let conn = crate::db::commands::get_connection(&app)?;
+    conn.execute(
+        "INSERT OR REPLACE INTO meta (key, value) VALUES (?1, ?2)",
+        rusqlite::params![ROBINHOOD_ZAN_API_KEY_META_KEY, encrypted],
+    )
+    .map_err(|error| format!("Failed to save Robinhood WSS configuration: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_robinhood_wss_api_key(
+    app: tauri::AppHandle,
+    session_token: String,
+) -> Result<(), String> {
+    crate::db::commands::verify_session_authenticated(&session_token)?;
+    let conn = crate::db::commands::get_connection(&app)?;
+    conn.execute(
+        "DELETE FROM meta WHERE key = ?1",
+        rusqlite::params![ROBINHOOD_ZAN_API_KEY_META_KEY],
+    )
+    .map_err(|error| format!("Failed to clear Robinhood WSS configuration: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_robinhood_wss_endpoint_scoped(
+    app: tauri::AppHandle,
+    session_token: String,
+) -> Result<Option<String>, String> {
+    verify_authenticated_network_access(&session_token)?;
+    let Some(api_key) = load_robinhood_zan_api_key(&app, &session_token)? else {
+        return Ok(None);
+    };
+
+    // The key is encrypted at rest. It is only released to the renderer's
+    // WebSocket transport after a fresh session + Safe Mode check.
+    Ok(Some(format!(
+        "wss://api.zan.top/node/ws/v1/robinhood/mainnet/{}",
+        api_key.as_str()
+    )))
 }
 
 pub fn verify_air_gap_inactive() -> Result<(), String> {
@@ -92,6 +215,7 @@ pub async fn scan_balances(
     wallet_id: Option<i64>,
     wallet_ids: Option<Vec<i64>>,
     chain_key: Option<String>,
+    exclude_chain_key: Option<String>,
 ) -> Result<ScanSummary, String> {
     crate::db::commands::verify_session_authenticated(&session_token)?;
     if AIR_GAPPED_MODE.load(Ordering::SeqCst) {
@@ -100,7 +224,32 @@ pub async fn scan_balances(
     let gate_session_token = session_token.clone();
     let network_gate: crate::core::scanner::NetworkAccessGate =
         std::sync::Arc::new(move || verify_authenticated_network_access(&gate_session_token));
-    execute_scan_balances(app, wallet_id, wallet_ids, chain_key, network_gate).await
+    let should_scan_robinhood = chain_key
+        .as_deref()
+        .map(|requested| requested == "robinhood")
+        .unwrap_or(true)
+        && exclude_chain_key.as_deref() != Some("robinhood");
+    let robinhood_rpc_override = if should_scan_robinhood {
+        network_gate.as_ref()()?;
+        load_robinhood_zan_api_key(&app, &session_token)?.map(|api_key| {
+            zeroize::Zeroizing::new(format!(
+                "https://api.zan.top/node/v1/robinhood/mainnet/{}",
+                api_key.as_str()
+            ))
+        })
+    } else {
+        None
+    };
+    execute_scan_balances(
+        app,
+        wallet_id,
+        wallet_ids,
+        chain_key,
+        exclude_chain_key,
+        robinhood_rpc_override,
+        network_gate,
+    )
+    .await
 }
 
 #[tauri::command]

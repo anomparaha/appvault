@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useApp } from "../../context/AppContext";
 import { CHAINS, type ChainKey } from "../../lib/chains/chains";
 import { ChainIcon, IconRefresh, IconArrowLeft, IconZap, IconTrash } from "../../icons";
+import { robinhoodWs } from "../../services/robinhoodWsService";
 
 interface RpcPingResult {
   latency_ms: number;
@@ -60,6 +61,57 @@ export function RpcManagerWorkspace({ onBack }: { onBack?: () => void }) {
   const [endpoints, setEndpoints] = useState<Record<string, EndpointState[]>>({});
   const [isPingingAll, setIsPingingAll] = useState(false);
   const [newRpcInput, setNewRpcInput] = useState<Record<string, string>>({});
+  const [zanApiKeyInput, setZanApiKeyInput] = useState("");
+  const [hasZanApiKey, setHasZanApiKey] = useState(false);
+  const [isSavingZanApiKey, setIsSavingZanApiKey] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setHasZanApiKey(false);
+    setZanApiKeyInput("");
+    if (!sessionToken) return () => { cancelled = true; };
+    void invoke<boolean>("has_robinhood_wss_api_key", { sessionToken })
+      .then((configured) => {
+        if (!cancelled) setHasZanApiKey(configured);
+      })
+      .catch(() => {
+        if (!cancelled) setHasZanApiKey(false);
+      });
+    return () => { cancelled = true; };
+  }, [sessionToken]);
+
+  const saveZanApiKey = async () => {
+    const apiKey = zanApiKeyInput.trim();
+    if (!sessionToken || !apiKey || isSavingZanApiKey) return;
+    setIsSavingZanApiKey(true);
+    try {
+      await invoke("set_robinhood_wss_api_key", { sessionToken, apiKey });
+      setHasZanApiKey(true);
+      setZanApiKeyInput("");
+      robinhoodWs.reconnectNow();
+      toast("ZAN Robinhood WSS credential saved encrypted in the vault.", "success");
+    } catch {
+      toast("Could not save the ZAN API key. Check the key format and unlock the vault.", "error");
+    } finally {
+      setIsSavingZanApiKey(false);
+    }
+  };
+
+  const clearZanApiKey = async () => {
+    if (!sessionToken || isSavingZanApiKey) return;
+    setIsSavingZanApiKey(true);
+    try {
+      await invoke("clear_robinhood_wss_api_key", { sessionToken });
+      setHasZanApiKey(false);
+      setZanApiKeyInput("");
+      robinhoodWs.reconnectNow();
+      toast("ZAN Robinhood WSS credential removed from the vault.", "info");
+    } catch {
+      toast("Could not remove the ZAN API key.", "error");
+    } finally {
+      setIsSavingZanApiKey(false);
+    }
+  };
 
   // Initialize endpoints from CHAINS and customRpcs
   useEffect(() => {
@@ -252,6 +304,79 @@ export function RpcManagerWorkspace({ onBack }: { onBack?: () => void }) {
           </button>
         </div>
       </div>
+
+      <section
+        aria-label="Robinhood live WebSocket configuration"
+        style={{
+          marginBottom: "18px",
+          padding: "16px 18px",
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--r-md)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
+          <div>
+            <h2 style={{ margin: 0, fontSize: "14px", display: "flex", alignItems: "center", gap: "7px" }}>
+              <IconZap size={14} /> Robinhood Chain · ZAN WSS
+            </h2>
+            <p style={{ margin: "5px 0 0", fontSize: "11px", color: "var(--text-dim)" }}>
+              Subscribe to new blocks and refresh selected Robinhood wallets as soon as a block arrives.
+            </p>
+          </div>
+          <span
+            className="badge"
+            style={{
+              background: hasZanApiKey ? "var(--ok-soft)" : "var(--surface-3)",
+              color: hasZanApiKey ? "var(--ok)" : "var(--text-dim)",
+              border: `1px solid ${hasZanApiKey ? "var(--ok-border)" : "var(--border)"}`,
+            }}
+          >
+            {hasZanApiKey ? "ZAN key saved in vault" : "ZAN key not configured"}
+          </span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px", marginTop: "12px", flexWrap: "wrap" }}>
+          <input
+            type="password"
+            className="input-base"
+            autoComplete="new-password"
+            spellCheck={false}
+            aria-label="ZAN API key for Robinhood Chain WebSocket"
+            placeholder={hasZanApiKey ? "Enter a replacement ZAN API key…" : "Paste the ZAN API key (not the full endpoint URL)…"}
+            value={zanApiKeyInput}
+            onChange={(event) => setZanApiKeyInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void saveZanApiKey();
+            }}
+            disabled={!sessionToken || isSavingZanApiKey}
+            style={{ height: "32px", flex: "1 1 300px", maxWidth: "620px", fontSize: "11px" }}
+          />
+          <button
+            type="button"
+            className="btn primary sm"
+            onClick={() => void saveZanApiKey()}
+            disabled={!sessionToken || !zanApiKeyInput.trim() || isSavingZanApiKey}
+            style={{ height: "32px", padding: "0 12px", fontSize: "11px" }}
+          >
+            {isSavingZanApiKey ? "Saving…" : hasZanApiKey ? "Replace key" : "Save key"}
+          </button>
+          {hasZanApiKey && (
+            <button
+              type="button"
+              className="btn sm"
+              onClick={() => void clearZanApiKey()}
+              disabled={!sessionToken || isSavingZanApiKey}
+              style={{ height: "32px", padding: "0 12px", fontSize: "11px", color: "var(--danger)" }}
+            >
+              Remove key
+            </button>
+          )}
+        </div>
+        <p style={{ margin: "8px 0 0", fontSize: "10px", color: "var(--text-dim)" }}>
+          The key is encrypted with the vault master password; it is never written to localStorage or source code.
+          The live socket only runs in an unlocked vault with Safe Mode off. Robinhood HTTP fallback is used only while WSS is unavailable.
+        </p>
+      </section>
 
       {/* Network Cards Grid */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: "18px" }}>

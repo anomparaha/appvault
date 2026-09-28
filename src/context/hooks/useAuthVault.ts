@@ -14,6 +14,7 @@ import { logActivity } from '../../lib/services/activity';
 import { cancelActiveAddressInspections } from '../../lib/services/addressInspector';
 import { cancelActiveTokenPriceRequests } from '../../services/tokenPriceService';
 import { solanaWs } from '../../services/solanaWsService';
+import { robinhoodWs } from '../../services/robinhoodWsService';
 import type { ToastType } from '../types/toast';
 
 function stopRendererNetworkActivity(): void {
@@ -21,6 +22,7 @@ function stopRendererNetworkActivity(): void {
   cancelActiveTokenPriceRequests();
   solanaWs.setWatchedAddresses([]);
   solanaWs.setEnabled(false);
+  robinhoodWs.setEnabled(false);
 }
 
 export type Screen = 'loading' | 'setup' | 'unlock' | 'app' | 'error';

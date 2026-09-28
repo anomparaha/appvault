@@ -4,17 +4,19 @@ import { getTradePositions, subscribeTradePositions, type TokenTradePosition } f
 import { getActivities, subscribeActivities, type ActivityRecord } from "../../lib/services/activity";
 import { calculateWinRate, type Timeframe } from "../../lib/services/winrateAnalytics";
 import { solanaWs } from "../../services/solanaWsService";
+import { robinhoodWs, type RobinhoodWsStatus } from "../../services/robinhoodWsService";
 import { IconTrendingUp } from "../../icons";
 
 export function WinRateCard({ compact = false }: { compact?: boolean }) {
   const { wallets, selectedSweepIds, isAirGapped, networkSessionReady } = useApp();
-  const robinhoodPollingActive = networkSessionReady && !isAirGapped &&
-    wallets.some((wallet) => Boolean(wallet.address) && selectedSweepIds.has(wallet.id));
+  const robinhoodSelected = wallets.some((wallet) => Boolean(wallet.address) && selectedSweepIds.has(wallet.id));
   const [activities, setActivities] = useState<ActivityRecord[]>(() => getActivities());
   const [positions, setPositions] = useState<TokenTradePosition[]>(() => getTradePositions());
   const [timeframe, setTimeframe] = useState<Timeframe>("7D");
   const [solWsConnected, setSolWsConnected] = useState<boolean>(false);
   const [latestSlot, setLatestSlot] = useState<number>(0);
+  const [robinhoodWsStatus, setRobinhoodWsStatus] = useState<RobinhoodWsStatus>(() => robinhoodWs.getStatus());
+  const [latestRobinhoodBlock, setLatestRobinhoodBlock] = useState(() => robinhoodWs.getLatestBlock());
 
   useEffect(() => {
     const unsub = subscribeActivities((latest) => {
@@ -34,9 +36,13 @@ export function WinRateCard({ compact = false }: { compact?: boolean }) {
     const unsubSolSlot = solanaWs.subscribeSlots((slotNum) => {
       setLatestSlot(slotNum);
     });
+    const unsubRobinhoodStatus = robinhoodWs.subscribeStatus(setRobinhoodWsStatus);
+    const unsubRobinhoodBlocks = robinhoodWs.subscribeBlocks((block) => setLatestRobinhoodBlock(block));
     return () => {
       unsubSolStatus();
       unsubSolSlot();
+      unsubRobinhoodStatus();
+      unsubRobinhoodBlocks();
     };
   }, []);
 
@@ -55,6 +61,24 @@ export function WinRateCard({ compact = false }: { compact?: boolean }) {
     if (stats.winRate >= 50) return "var(--accent)";
     return "var(--danger)";
   }, [stats]);
+
+  const robinhoodWsConnected = networkSessionReady && !isAirGapped && robinhoodWsStatus === "connected";
+  const robinhoodWsLabel = !robinhoodSelected
+    ? "Robinhood Idle"
+    : isAirGapped || !networkSessionReady
+      ? "Robinhood Offline"
+      : robinhoodWsConnected
+        ? `Robinhood Live${latestRobinhoodBlock ? ` #${latestRobinhoodBlock.number.toLocaleString()}` : ""}`
+        : robinhoodWsStatus === "unconfigured"
+          ? "Robinhood WSS Setup"
+          : robinhoodWsStatus === "error" || robinhoodWsStatus === "disconnected"
+            ? "Robinhood WS Retry"
+            : "Robinhood WS…";
+  const robinhoodWsColor = robinhoodWsConnected
+    ? "#4ade80"
+    : robinhoodWsStatus === "error" || robinhoodWsStatus === "disconnected"
+      ? "#fbbf24"
+      : "var(--text-dim)";
 
   if (compact) {
     return (
@@ -149,23 +173,24 @@ export function WinRateCard({ compact = false }: { compact?: boolean }) {
           <span
             style={{
               fontSize: "11px",
-              color: robinhoodPollingActive ? "#4ade80" : "var(--text-dim)",
+              color: robinhoodWsColor,
               display: "inline-flex",
               alignItems: "center",
               gap: "5px",
             }}
-            title="Robinhood Chain uses gated public HTTP RPC polling, not a renderer WebSocket provider."
+            title="Robinhood uses a gated ZAN WSS newHeads subscription. Each block triggers a native balance refresh; HTTP fallback resumes only while WSS is unavailable."
           >
             <span
               style={{
                 width: "6px",
                 height: "6px",
                 borderRadius: "50%",
-                background: robinhoodPollingActive ? "#22c55e" : "var(--text-dim)",
+                background: robinhoodWsConnected ? "#22c55e" : robinhoodWsColor,
+                boxShadow: robinhoodWsConnected ? "0 0 8px #22c55e" : "none",
               }}
             />
             <span style={{ fontSize: "10px", fontWeight: 600 }}>
-              {robinhoodPollingActive ? "Robinhood HTTP Poll" : "Robinhood Idle"}
+              {robinhoodWsLabel}
             </span>
           </span>
 

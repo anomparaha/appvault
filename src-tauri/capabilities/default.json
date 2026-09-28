@@ -21,6 +21,7 @@
     "allow-vault-crypto",
     "allow-vault-derivation",
     "allow-air-gapped-controls",
+    "allow-robinhood-ws-config",
     "allow-recovery-session",
     "allow-price-feed",
     "allow-official-token-metadata",

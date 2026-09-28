@@ -7,6 +7,7 @@ import { cancelActiveTokenPriceRequests } from '../../services/tokenPriceService
 import { walletHasScanTarget } from '../../lib/wallets/wallet';
 import { logActivity } from '../../lib/services/activity';
 import { solanaWs } from '../../services/solanaWsService';
+import { robinhoodWs } from '../../services/robinhoodWsService';
 import type { ScanProgress, WalletView } from '../../lib/types/index';
 import type { ToastType } from '../types/toast';
 
@@ -20,7 +21,7 @@ interface UseWalletScannerProps {
 
 const SCAN_CHUNK_SIZE = 1;
 type ScanResult = { funded: number; errors: number; started: boolean; cancelled: boolean };
-type PendingWalletRefresh = { wallet: WalletView; chainKey?: string };
+type PendingWalletRefresh = { wallet: WalletView; chainKey?: string; excludeChainKey?: string };
 
 function chunksOf<T>(items: T[], size: number): T[][] {
   const chunks: T[][] = [];
@@ -44,7 +45,7 @@ export function useWalletScanner({
   const bgSyncInProgressRef = useRef(false);
   const airGapToggleInProgressRef = useRef(false);
   const pendingRefreshesRef = useRef(new Map<string, PendingWalletRefresh>());
-  const refreshWalletsRef = useRef<(targets: WalletView[], chainKey?: string) => Promise<void>>(async () => {});
+  const refreshWalletsRef = useRef<(targets: WalletView[], chainKey?: string, excludeChainKey?: string) => Promise<void>>(async () => {});
   const drainPendingRefreshesRef = useRef<() => void>(() => {});
 
   // Start fail-closed; persisted Online Mode is not honored until the native
@@ -103,6 +104,7 @@ export function useWalletScanner({
         cancelActiveTokenPriceRequests();
         solanaWs.setWatchedAddresses([]);
         solanaWs.setEnabled(false);
+        robinhoodWs.setEnabled(false);
         if (manualScanInProgressRef.current) {
           // The active native RPC may already have been accepted; stop before another wallet.
           scanCancelledRef.current = true;
@@ -265,12 +267,13 @@ export function useWalletScanner({
    * wallet state, but does not show a manual-scan spinner or toast on every tick.
    */
   const refreshWallets = useCallback(
-    async (targets: WalletView[], chainKey?: string): Promise<void> => {
+    async (targets: WalletView[], chainKey?: string, excludeChainKey?: string): Promise<void> => {
       const activeSessionToken = sessionTokenRef.current;
       if (!targets.length || isAirGappedRef.current || !activeSessionToken) return;
       if (manualScanInProgressRef.current || bgSyncInProgressRef.current) {
         for (const wallet of targets) {
-          pendingRefreshesRef.current.set(`${chainKey ?? "all"}:${wallet.id}`, { wallet, chainKey });
+          const refreshKey = `${chainKey ?? "all"}:${excludeChainKey ?? "none"}:${wallet.id}`;
+          pendingRefreshesRef.current.set(refreshKey, { wallet, chainKey, excludeChainKey });
         }
         return;
       }
@@ -289,8 +292,8 @@ export function useWalletScanner({
           const ids = chunk.map((wallet) => wallet.id);
           try {
             const summary = chunk.length === 1
-              ? await rustScan(activeSessionToken, chunk[0].id, undefined, chainKey)
-              : await rustScan(activeSessionToken, undefined, ids, chainKey);
+              ? await rustScan(activeSessionToken, chunk[0].id, undefined, chainKey, excludeChainKey)
+              : await rustScan(activeSessionToken, undefined, ids, chainKey, excludeChainKey);
             shouldReload = shouldReload || summary.scanned > 0;
             if (summary.errors > 0) {
               console.warn(`[Live wallet sync] ${summary.errors} RPC checks failed`, { chainKey, ids });
@@ -319,12 +322,16 @@ export function useWalletScanner({
     }
     if (manualScanInProgressRef.current || bgSyncInProgressRef.current || pendingRefreshesRef.current.size === 0) return;
 
-    const grouped = new Map<string, { chainKey?: string; targets: Map<number, WalletView> }>();
+    const grouped = new Map<string, { chainKey?: string; excludeChainKey?: string; targets: Map<number, WalletView> }>();
     for (const pending of pendingRefreshesRef.current.values()) {
-      const key = pending.chainKey ?? "all";
+      const key = `${pending.chainKey ?? "all"}:${pending.excludeChainKey ?? "none"}`;
       let group = grouped.get(key);
       if (!group) {
-        group = { chainKey: pending.chainKey, targets: new Map() };
+        group = {
+          chainKey: pending.chainKey,
+          excludeChainKey: pending.excludeChainKey,
+          targets: new Map(),
+        };
         grouped.set(key, group);
       }
       group.targets.set(pending.wallet.id, pending.wallet);
@@ -333,7 +340,11 @@ export function useWalletScanner({
 
     window.setTimeout(() => {
       for (const group of grouped.values()) {
-        void refreshWalletsRef.current(Array.from(group.targets.values()), group.chainKey);
+        void refreshWalletsRef.current(
+          Array.from(group.targets.values()),
+          group.chainKey,
+          group.excludeChainKey,
+        );
       }
     }, 0);
   }, []);

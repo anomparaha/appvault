@@ -11,11 +11,13 @@ export async function rustScan(
   walletId?: number,
   walletIds?: number[],
   chainKey?: string,
+  excludeChainKey?: string,
 ): Promise<ScanSummary> {
   return invoke<ScanSummary>("scan_balances", {
     sessionToken,
     walletId: walletId ?? null,
     walletIds: walletIds ?? null,
     chainKey: chainKey ?? null,
+    excludeChainKey: excludeChainKey ?? null,
   });
 }
