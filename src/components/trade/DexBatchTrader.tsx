@@ -146,11 +146,11 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
 
   const handleExecute = async () => {
     if (!sessionToken) {
-      toast("Vault session required. Unlock the vault before trading.", "error");
+      toast("A vault session is required. Unlock the vault before starting a swap.", "error");
       return;
     }
     if (!networkSessionReady) {
-      toast("The native vault-session network gate is not ready. Wait for the session check and try again.", "error");
+      toast("Secure network access is not ready. Wait for the vault session check to finish, then try again.", "error");
       return;
     }
     if (isAirGapped) {
@@ -158,7 +158,7 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
       return;
     }
     if (!isSolana) {
-      toast("DEX router for EVM networks is currently in development", "info");
+      toast("DEX routing for EVM networks is still in development.", "info");
       return;
     }
     const tradeSessionToken = sessionToken;
@@ -171,20 +171,20 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
 
     const amountNum = tradeAction === "buy" ? Number(amountPerWallet) : 0;
     if (tradeAction === "buy" && (!Number.isFinite(amountNum) || amountNum <= 0)) {
-      toast("Please enter a finite buy amount greater than zero SOL", "error");
+      toast("Enter a valid buy amount greater than 0 SOL.", "error");
       return;
     }
 
     const slippagePct = Number(slippage);
     if (!Number.isFinite(slippagePct) || slippagePct < 0 || slippagePct > 50) {
-      toast("Slippage must be between 0 and 50 percent.", "error");
+      toast("Slippage must be between 0% and 50%.", "error");
       return;
     }
     const slippageBps = Math.round(slippagePct * 100);
 
     const isMasterBuy = scopeMode === "batch" && tradeAction === "buy" && fundingMode === "master";
     if (isMasterBuy && !selectedMasterWallet) {
-      toast("No Master Wallet with SOL found to fund the batch buy", "error");
+      toast("No funded master wallet is available for the batch buy.", "error");
       return;
     }
 
@@ -193,10 +193,10 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
       : executionTargets;
     if (recipientTargets.length === 0) {
       toast(isMasterBuy
-        ? "Select at least one recipient wallet other than the master funder."
+        ? "Select at least one recipient wallet other than the master wallet."
         : tradeAction === "sell"
-        ? "No selected wallet has a discovered positive balance for this mint. Scan wallets and verify the exact mint address first."
-        : "No eligible Solana wallet selected for trading", "error");
+        ? "None of the selected wallets has a positive balance for this mint. Scan the wallets and verify the mint address."
+        : "No eligible Solana wallet is selected.", "error");
       return;
     }
 
@@ -217,7 +217,7 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
           }
           const requiredLamports = (buyLamports + reserveLamports) * BigInt(recipientTargets.length);
           if (BigInt(account.balance_hex) < requiredLamports) {
-            toast(`Master wallet needs about ${(Number(requiredLamports) / 1e9).toFixed(3)} SOL including network/ATA reserves.`, "error");
+            toast(`The master wallet needs approximately ${(Number(requiredLamports) / 1e9).toFixed(3)} SOL, including network fees and account-creation reserves.`, "error");
             return;
           }
         } else {
@@ -228,13 +228,13 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
             const account = await readBalance(target.solAddress!);
             const requiredLamports = buyLamports + reserveLamports;
             if (BigInt(account.balance_hex) < requiredLamports) {
-              toast(`Wallet ${shortAddr(target.solAddress || "")} needs ${amountNum} SOL plus a ${SOLANA_BUY_RESERVE_SOL.toFixed(3)} SOL fee/ATA reserve.`, "error");
+              toast(`Wallet ${shortAddr(target.solAddress || "")} needs ${amountNum} SOL plus an estimated ${SOLANA_BUY_RESERVE_SOL.toFixed(3)} SOL for network fees and account creation.`, "error");
               return;
             }
           }
         }
       } catch (error) {
-        toast(`Could not verify live SOL funding balance: ${String(error)}`, "error");
+        toast(`Could not verify the live SOL balance: ${String(error)}`, "error");
         return;
       }
     }
@@ -248,7 +248,7 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
         ? `CONFIRM SINGLE-WALLET ${tradeAction.toUpperCase()} SWAP\n\n` +
           `Wallet: ${selectedSingleWallet?.label || `Wallet #${selectedSingleWallet?.id}`} (${shortAddr(selectedSingleWallet?.solAddress || "")})\n` +
           `Token mint: ${shortAddr(mint)}\n` +
-          `${tradeAction === "buy" ? `Buy amount: ${amountNum} SOL from this wallet\nFee and account reserve: ${SOLANA_BUY_RESERVE_SOL.toFixed(3)} SOL\nOutput stays in this wallet.` : "Sell the selected token balance from this wallet to SOL. Proceeds return to this wallet."}\n` +
+          `${tradeAction === "buy" ? `Buy amount: ${amountNum} SOL from this wallet\nEstimated network and account reserve: ${SOLANA_BUY_RESERVE_SOL.toFixed(3)} SOL\nThe tokens will remain in this wallet.` : "Sell this wallet’s selected token balance for SOL. The proceeds will return to this wallet."}\n` +
           `Slippage: ${(slippageBps / 100).toFixed(1)}%\n\n` +
           `Continue with the swap?`
         : isMasterBuy
@@ -257,16 +257,16 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
           `Token mint: ${shortAddr(mint)}\n` +
           `Recipient wallets: ${recipientTargets.length}\n` +
           `Buy amount per wallet: ${amountNum} SOL\n` +
-          `Buy capital: ${totalNeededSol} SOL\n` +
-          `Estimated fee and account reserve: ${totalReservedSol} SOL\n` +
-          `Estimated master requirement: ${(Number(totalNeededSol) + Number(totalReservedSol)).toFixed(3)} SOL\n` +
+          `Total buy amount: ${totalNeededSol} SOL\n` +
+          `Estimated network fees and account reserves: ${totalReservedSol} SOL\n` +
+          `Estimated total required from the master wallet: ${(Number(totalNeededSol) + Number(totalReservedSol)).toFixed(3)} SOL\n` +
           `Slippage: ${(slippageBps / 100).toFixed(1)}%\n\n` +
           `Swaps run sequentially because they share one funding wallet. Tokens are delivered to each selected recipient wallet.\n\n` +
           `Continue with the batch buy?`
         : `CONFIRM SELECTED-WALLET BATCH ${tradeAction.toUpperCase()}\n\n` +
           `Token mint: ${shortAddr(mint)}\n` +
           `Selected wallets: ${recipientTargets.length}\n` +
-          `${tradeAction === "buy" ? `Amount per wallet: ${amountNum} SOL\nTotal buy capital: ${totalNeededSol} SOL\nEstimated fee and account reserve: ${totalReservedSol} SOL\n` : "Action: sell each selected wallet's discovered token balance to SOL.\n"}` +
+          `${tradeAction === "buy" ? `Amount per wallet: ${amountNum} SOL\nTotal buy amount: ${totalNeededSol} SOL\nEstimated network fees and account reserves: ${totalReservedSol} SOL\n` : "Action: sell each selected wallet’s discovered token balance for SOL.\n"}` +
           `Slippage: ${(slippageBps / 100).toFixed(1)}%\n` +
           `Execution: ${parallelBatch ? "parallel, up to 3 wallets at a time" : "sequential"}\n\n` +
           `Continue with the batch swap?`
@@ -306,12 +306,12 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
         ? status === "confirmed" ? "DEX Buy Confirmed" : status === "pending" ? "DEX Buy Submitted" : "DEX Buy Failed"
         : status === "confirmed" ? "DEX Sell Confirmed" : status === "pending" ? "DEX Sell Submitted" : "DEX Sell Failed";
       const fundingDesc = isMasterBuy && selectedMasterWallet
-        ? `Funded by Master ${shortAddr(selectedMasterWallet.address)} for recipient ${shortAddr(fromAddr)}`
-        : `Wallet ${shortAddr(fromAddr)} traded with its own SOL`;
+        ? `The master wallet ${shortAddr(selectedMasterWallet.address)} funded this swap for recipient wallet ${shortAddr(fromAddr)}`
+        : `Wallet ${shortAddr(fromAddr)} used its own SOL`;
       const defaultDesc = status === "confirmed"
-        ? `${tradeAction === "buy" ? `Bought with ${amountNum} SOL` : "Sold token to SOL"} via Jupiter. ${fundingDesc}.`
+        ? `${tradeAction === "buy" ? `Bought with ${amountNum} SOL` : "Sold tokens for SOL"} via Jupiter. ${fundingDesc}.`
         : status === "pending"
-        ? `Transaction submitted; awaiting on-chain confirmation. ${fundingDesc}.`
+        ? `Transaction submitted and is awaiting on-chain confirmation. ${fundingDesc}.`
         : `${res.error || "Transaction failed before confirmation."} ${fundingDesc}.`;
 
       logActivity({
@@ -496,8 +496,8 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
               <div className="trading-card-heading-main">
                 <span className="trading-step">01</span>
                 <div>
-                  <h3>Wallet scope &amp; action</h3>
-                  <p>Batch mode uses only wallets explicitly selected from Portfolio.</p>
+                  <h3>Wallet selection &amp; swap action</h3>
+                  <p>Batch swaps include only the wallets you select in Portfolio.</p>
                 </div>
               </div>
             </div>
@@ -505,7 +505,7 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
             <div className="trading-scope-row">
               <div className="trading-scope-copy">
                 <b>Wallet scope</b>
-                <small>{scopeMode === "single" ? "One wallet trades from its own balance." : "Only Portfolio-selected wallets enter the batch."}</small>
+                <small>{scopeMode === "single" ? "One wallet uses its own balance for the swap." : "Only wallets selected in Portfolio are included in the batch."}</small>
               </div>
               <div className="trading-controls">
                 {!isLockedToPropWallet && (
@@ -553,7 +553,7 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
               <div className="dex-field">
                 <div className="trading-field-label-row">
                   <label className="dex-label">Network</label>
-                  <span className="trading-field-hint">DEX execution shown for Solana only</span>
+                  <span className="trading-field-hint">DEX swaps are currently available on Solana only.</span>
                 </div>
                 <div className="dex-chain-tabs">
                   {[
@@ -584,7 +584,7 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
               {scopeMode === "single" && !isLockedToPropWallet && isSolana && (
                 <div className="dex-wallet-selector-card">
                   <div className="dex-wallet-selector-left">
-                    <div className="dex-wallet-selector-badge"><IconTarget size={12} /> Trading wallet</div>
+                    <div className="dex-wallet-selector-badge"><IconTarget size={12} /> Swap wallet</div>
                     <select
                       className="dex-wallet-select mono"
                       value={selectedSingleWallet?.id ?? ""}
@@ -668,7 +668,7 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
                   <div className="dex-funding-heading">
                     <div>
                       <label className="dex-label">Batch buy funding</label>
-                      <p>Choose how SOL is provided for each selected wallet’s buy.</p>
+                      <p>Choose whether each wallet funds its own swap or one master wallet funds the batch.</p>
                     </div>
                     <div className="dex-funding-toggle" role="group" aria-label="Batch buy funding source">
                       <button
@@ -677,14 +677,14 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
                         onClick={() => setFundingMode("distributed")}
                         disabled={executing}
                         aria-pressed={fundingMode === "distributed"}
-                      >Each wallet pays</button>
+                      >Each wallet funds its own swap</button>
                       <button
                         type="button"
                         className={fundingMode === "master" ? "active" : ""}
                         onClick={() => setFundingMode("master")}
                         disabled={executing || solCandidateMasters.length === 0}
                         aria-pressed={fundingMode === "master"}
-                      >One master wallet</button>
+                      >Use one master wallet</button>
                     </div>
                   </div>
                   {fundingMode === "master" && (
@@ -705,7 +705,7 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
                         {solCandidateMasters.length === 0 && <option value="">No funded Solana wallets found</option>}
                       </select>
                       <span className="dex-master-funding-hint">
-                        Estimated buy capital: {(activeWalletsCount * (parseFloat(amountPerWallet) || 0.05)).toFixed(3)} SOL, plus network and account reserves.
+                        Estimated total buy amount: {(activeWalletsCount * (parseFloat(amountPerWallet) || 0.05)).toFixed(3)} SOL, plus network and account reserves.
                       </span>
                     </div>
                   )}
@@ -794,18 +794,18 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
           <section className="trading-card trading-summary-card">
             <div className="trading-summary-heading">
               <div><h3>Swap review</h3><p>Check target scope and inputs before continuing.</p></div>
-              <span className="trading-preview-pill"><i /> Route untested</span>
+              <span className="trading-preview-pill"><i /> Route not live-tested</span>
             </div>
             <div className="trading-summary-stats">
               <div className="trading-summary-stat"><span>Target wallets</span><strong>{activeWalletsCount} {activeWalletsCount === 1 ? "wallet" : "wallets"}</strong></div>
-              <div className="trading-summary-stat"><span>{tradeAction === "buy" ? "Buy input" : "Sell target"}</span><strong className="good">{tradeAction === "buy"
+              <div className="trading-summary-stat"><span>{tradeAction === "buy" ? "Buy input" : "Token balances"}</span><strong className="good">{tradeAction === "buy"
                 ? `${scopeMode === "single" ? amountPerWallet : (parseFloat(amountPerWallet || "0") * activeWalletsCount).toFixed(3)} SOL`
-                : executionTargets.length > 0 ? `${executionTargets.length} token balance${executionTargets.length === 1 ? "" : "s"}` : "Set mint address"}</strong></div>
+                : executionTargets.length > 0 ? `${executionTargets.length} token balance${executionTargets.length === 1 ? "" : "s"}` : "Enter a token mint"}</strong></div>
             </div>
             <div className="trading-review-lines">
-              <div className="trading-review-line"><span>Action</span><b>{tradeAction === "buy" ? "Buy token" : "Sell token to SOL"}</b></div>
-              <div className="trading-review-line"><span>Route</span><b>Jupiter · unverified</b></div>
-              <div className="trading-review-line"><span>Funding</span><b>{scopeMode !== "batch" ? "Wallet balance" : masterBuyMode ? `Master · ${shortAddr(selectedMasterWallet?.address || "")}` : "Each wallet pays"}</b></div>
+              <div className="trading-review-line"><span>Action</span><b>{tradeAction === "buy" ? "Buy token" : "Sell token for SOL"}</b></div>
+              <div className="trading-review-line"><span>Route</span><b>Jupiter · not live-tested</b></div>
+              <div className="trading-review-line"><span>Funding</span><b>{scopeMode !== "batch" ? "Wallet balance" : masterBuyMode ? `Master wallet · ${shortAddr(selectedMasterWallet?.address || "")}` : "Each wallet self-funds"}</b></div>
               <div className="trading-review-line"><span>Execution</span><b>{scopeMode !== "batch" ? "Single wallet" : masterBuyMode ? "Sequential · shared source" : batchRunsParallel ? "Parallel · up to 3" : "Sequential"}</b></div>
               <div className="trading-review-line"><span>Slippage</span><b>{slippage}%</b></div>
             </div>

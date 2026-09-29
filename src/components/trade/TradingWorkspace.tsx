@@ -45,15 +45,15 @@ export function TradingWorkspace({ mode, onModeChange, wallet }: TradingWorkspac
       <header className="trading-workspace-heading">
         <div className="trading-title-copy">
           <div className="trading-eyebrow"><span /> MULTI-WALLET OPERATIONS</div>
-          <h1>Trading workspace</h1>
-          <p>Swap tokens or transfer balances from one focused workspace. Each action keeps its own setup, review, and confirmation flow.</p>
+          <h1>Trade workspace</h1>
+          <p>Swap tokens or transfer balances in one focused workspace. Each workflow has its own setup, review, and confirmation steps.</p>
         </div>
         <div className={`trading-session-pill ${sessionClass}`}>
           <i /> {sessionLabel}
         </div>
       </header>
 
-      <div className="trading-mode-tabs" role="tablist" aria-label="Trading action">
+      <div className="trading-mode-tabs" role="tablist" aria-label="Trade mode">
         <button
           type="button"
           id="trading-tab-swap"
@@ -79,7 +79,7 @@ export function TradingWorkspace({ mode, onModeChange, wallet }: TradingWorkspac
           disabled={busyMode !== null}
         >
           <span className="trading-mode-icon" aria-hidden="true">⇄</span>
-          <span className="trading-mode-copy"><b>Transfer &amp; sweep</b><small>Move native assets or SPL tokens to a recipient</small></span>
+          <span className="trading-mode-copy"><b>Transfer &amp; Sweep</b><small>Move native assets or SPL tokens to a recipient</small></span>
           <span className="trading-mode-arrow" aria-hidden="true">→</span>
         </button>
       </div>
@@ -88,13 +88,13 @@ export function TradingWorkspace({ mode, onModeChange, wallet }: TradingWorkspac
         <div>
           <h2>{activeMode === "swap" ? "Swap setup" : "Transfer setup"}</h2>
           <p>{activeMode === "swap"
-            ? "Configure a single-wallet trade or an explicit multi-wallet batch."
-            : "Move native balances or Solana SPL tokens to one destination address."}</p>
+            ? "Set up a single-wallet swap or a batch using only the wallets you select."
+            : "Transfer native assets or Solana SPL tokens to one destination address."}</p>
         </div>
         <span className="trading-view-note">
           {activeMode === "swap"
             ? <><b>Solana route</b> · not live-tested</>
-            : <><b>No swap action</b> · transfers only</>}
+            : <><b>Transfers only</b> · no swap route</>}
         </span>
       </div>
 

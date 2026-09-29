@@ -352,7 +352,7 @@ export function MainApp() {
       case "dashboard": return "Dashboard";
       case "wallets": return selected ? `Wallet #${selected.id}` : "Portfolio & Wallets";
       case "activity": return "Activity & Audit Log";
-      case "trading": return "Trading";
+      case "trading": return "Trade";
       case "import": return "Import Wallet";
       case "repair": return "Mnemonic Typo Repair";
       case "allowance": return "Token Approvals & Allowances";

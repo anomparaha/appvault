@@ -333,7 +333,7 @@ export function SweeperWorkspace({ wallet, active = true, onBusyChange }: Sweepe
       return;
     }
     if (!networkSessionReady || isAirGapped) {
-      toast("Enable Online Mode and wait for the vault network check before transferring.", "error");
+      toast("Turn on Online Mode and wait for the vault's network check to finish before transferring.", "error");
       return;
     }
     if (!validRecipient) {
@@ -345,7 +345,7 @@ export function SweeperWorkspace({ wallet, active = true, onBusyChange }: Sweepe
       return;
     }
     if (readyWallets.length === 0) {
-      toast("No selected wallet is currently eligible to transfer.", "error");
+      toast("No selected wallets are currently eligible for transfer.", "error");
       return;
     }
 
@@ -353,7 +353,7 @@ export function SweeperWorkspace({ wallet, active = true, onBusyChange }: Sweepe
     const assetLabel = isTokenTransfer ? activeToken?.symbol || "SPL token" : activeChain.symbol;
     const totalMessage = totalToDestination;
     const confirmed = window.confirm(
-      `Confirm ${assetLabel} transfer\n\n` +
+      `Confirm the ${assetLabel} transfer\n\n` +
       `Network: ${activeChain.name}\n` +
       `Source wallets: ${readyWallets.length}\n` +
       `Estimated total to recipient: ${totalMessage}\n` +
@@ -457,7 +457,7 @@ export function SweeperWorkspace({ wallet, active = true, onBusyChange }: Sweepe
         logActivity({
           type: "sweep",
           title: status === "confirmed"
-            ? `Swept ${assetLabel} to recipient`
+            ? `Transferred ${assetLabel} to the recipient`
             : status === "pending"
               ? `${assetLabel} transfer pending`
               : `${assetLabel} transfer failed`,
@@ -490,7 +490,7 @@ export function SweeperWorkspace({ wallet, active = true, onBusyChange }: Sweepe
     setTxResults((previous) => ({ ...previous, ...operationResults }));
     if (confirmedCount > 0 || pendingCount > 0) {
       toast(
-        `${confirmedCount} confirmed · ${pendingCount} pending · ${failedCount} failed`,
+        `Transfers: ${confirmedCount} confirmed · ${pendingCount} pending · ${failedCount} failed`,
         pendingCount > 0 || failedCount > 0 ? "info" : "success",
       );
       const refreshTargets = new Map<number, WalletView>();
@@ -506,17 +506,17 @@ export function SweeperWorkspace({ wallet, active = true, onBusyChange }: Sweepe
       }, 2500);
     } else if (failedCount > 0) {
       const firstError = Object.values(operationResults).find((result) => !result.success && !result.pending)?.error;
-      toast(`No transfer confirmed: ${(firstError || "Check the wallet rows for details.").slice(0, 110)}`, "error");
+      toast(`No transfers were confirmed. ${(firstError || "See the wallet rows for details.").slice(0, 110)}`, "error");
     }
   };
 
   const transferAssetSymbol = isTokenTransfer ? activeToken?.symbol || "SPL token" : activeChain.symbol;
   const recipientSummary = recipient.trim() ? shortAddr(recipient.trim()) : "Not entered";
   const feeSummary = isEvmChain
-    ? `${gasPriceGwei.toFixed(2)} Gwei · ${feeDataLive ? "live" : "estimate"}`
+    ? `${gasPriceGwei.toFixed(2)} Gwei · ${feeDataLive ? "Live" : "Estimate"}`
     : selectedFeePayer
       ? selectedFeePayer.label || `Wallet #${selectedFeePayer.id}`
-      : "Each source wallet";
+      : "Each source wallet pays its own fee";
 
   return (
     <div className="sweeper-workspace-panel sweep-page trading-operation trading-transfer" data-trading-active={active}>
@@ -528,7 +528,7 @@ export function SweeperWorkspace({ wallet, active = true, onBusyChange }: Sweepe
                 <span className="trading-step">01</span>
                 <div>
                   <h3>Network &amp; asset</h3>
-                  <p>Transfer native balances or discovered Solana tokens. No swap route is used.</p>
+                  <p>Send native assets or discovered Solana tokens. This flow does not use a swap route.</p>
                 </div>
               </div>
             </div>
@@ -580,7 +580,7 @@ export function SweeperWorkspace({ wallet, active = true, onBusyChange }: Sweepe
                   <div className="sweep-asset-readonly">
                     <ChainIcon chain={chainKey} size={18} />
                     <span>Native {activeChain.symbol}</span>
-                    <small>Solana SPL transfers are selected on the Solana network.</small>
+                    <small>SPL token transfers are available only on Solana.</small>
                   </div>
                 )}
 
@@ -615,7 +615,7 @@ export function SweeperWorkspace({ wallet, active = true, onBusyChange }: Sweepe
                         className="sweep-text-input mono"
                         value={customMintInput}
                         onChange={(event) => setCustomMintInput(event.target.value.trim())}
-                        placeholder="Paste Solana token mint"
+                        placeholder="Paste a Solana token mint address"
                         autoComplete="off"
                         spellCheck={false}
                         disabled={sweeping}
@@ -642,7 +642,7 @@ export function SweeperWorkspace({ wallet, active = true, onBusyChange }: Sweepe
                     className="sweep-text-input mono"
                     value={recipient}
                     onChange={(event) => setRecipient(event.target.value.trim())}
-                    placeholder={isEvmChain ? "0x… destination address" : "Paste Solana address"}
+                    placeholder={isEvmChain ? "Destination EVM address (0x…)" : "Paste a Solana address"}
                     autoComplete="off"
                     spellCheck={false}
                     disabled={sweeping}
@@ -707,7 +707,7 @@ export function SweeperWorkspace({ wallet, active = true, onBusyChange }: Sweepe
                 ) : (
                   <>
                     <div className="sweep-field-heading-row">
-                      <label className="sweep-field-label" htmlFor="sweep-fee-payer">Solana fee sponsor</label>
+                      <label className="sweep-field-label" htmlFor="sweep-fee-payer">Solana fee payer</label>
                       <span className="sweep-fee-live">Optional</span>
                     </div>
                     <select
@@ -724,7 +724,7 @@ export function SweeperWorkspace({ wallet, active = true, onBusyChange }: Sweepe
                     </select>
                     <span className="sweep-inline-hint">
                       {selectedFeePayer
-                        ? `${selectedFeePayer.label || `Wallet #${selectedFeePayer.id}`} sponsors eligible transfers; keep enough SOL there for the full batch.`
+                        ? `${selectedFeePayer.label || `Wallet #${selectedFeePayer.id}`} can pay network fees for eligible transfers; keep enough SOL in that wallet to cover the batch.`
                         : "Choose a funded wallet if a source cannot cover its own network fee."}
                     </span>
                   </>
@@ -742,7 +742,7 @@ export function SweeperWorkspace({ wallet, active = true, onBusyChange }: Sweepe
                   <p>
                     {loadingEstimates
                       ? "Refreshing balances and fee estimates…"
-                      : `${readyWallets.length} of ${targetWallets.length} selected wallet${targetWallets.length === 1 ? "" : "s"} ready to transfer.`}
+                      : `${readyWallets.length} of ${targetWallets.length} selected wallet${targetWallets.length === 1 ? " is" : "s are"} ready to transfer.`}
                   </p>
                 </div>
               </div>
@@ -760,15 +760,15 @@ export function SweeperWorkspace({ wallet, active = true, onBusyChange }: Sweepe
               <div className="sweep-empty-state">
                 <div className="sweep-empty-icon"><IconArrowLeft size={18} /></div>
                 <div>
-                  <strong>No source wallets selected</strong>
-                  <p>{wallet ? "This wallet has no address for the selected network." : "Select wallets in Portfolio, or choose funded wallets above."}</p>
+                  <strong>No source wallets are selected</strong>
+                  <p>{wallet ? "This wallet has no address for the selected network." : "Select wallets in Portfolio or choose funded wallets above."}</p>
                 </div>
               </div>
             ) : (
               <div className="sweep-table-scroll">
                 <table className="sweep-review-table">
                   <thead>
-                    <tr><th>Source wallet</th><th>Current balance</th><th>Est. fee</th><th>To recipient</th><th>Status</th></tr>
+                    <tr><th>Source wallet</th><th>Current balance</th><th>Estimated fee</th><th>Net to recipient</th><th>Status</th></tr>
                   </thead>
                   <tbody>
                     {targetWallets.map((sourceWallet) => {
@@ -835,10 +835,10 @@ export function SweeperWorkspace({ wallet, active = true, onBusyChange }: Sweepe
             <div className="trading-review-lines">
               <div className="trading-review-line"><span>Network</span><b>{activeChain.name}</b></div>
               <div className="trading-review-line"><span>Recipient</span><b>{recipientSummary}</b></div>
-              <div className="trading-review-line"><span>Fee setting</span><b>{feeSummary}</b></div>
-              <div className="trading-review-line"><span>Est. total</span><b>{totalToDestination}</b></div>
+              <div className="trading-review-line"><span>Fee details</span><b>{feeSummary}</b></div>
+              <div className="trading-review-line"><span>Estimated total</span><b>{totalToDestination}</b></div>
             </div>
-            <div className="trading-warning">Transfers are irreversible. Confirm the recipient, source list, fee setting, and estimates in the native confirmation prompt. Unavailable rows will not be sent.</div>
+            <div className="trading-warning">Transfers are irreversible. Verify the recipient, source wallets, fee details, and estimates in the confirmation prompt. Ineligible wallets will not be included.</div>
             <button
               type="button"
               className="trading-primary-button"
