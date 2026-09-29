@@ -1518,7 +1518,7 @@
   .dex-page .dex-wallet-select { min-width: 0; }
 }
 
-.dex-page .dex-funding-panel { border-color: rgba(251,191,36,.24) !important; background: rgba(251,191,36,.035) !important; }
+.dex-page .dex-funding-panel { border-color: rgba(251,191,36,.34); background: var(--surface-2); }
 .dex-funding-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .dex-funding-heading .dex-label { display: block; color: var(--warning, #fbbf24); }
 .dex-funding-heading p { margin: 4px 0 0; color: var(--text-faint); font-size: 9px; }

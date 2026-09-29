@@ -477,10 +477,10 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
   };
 
   const receiptAccent = lastTradeReceipt?.status === "confirmed"
-    ? { color: "#4ade80", background: "rgba(34, 197, 94, 0.12)", border: "rgba(34, 197, 94, 0.3)" }
+    ? { color: "#4ade80", background: "var(--surface-2)", badgeBackground: "var(--surface-3)", border: "rgba(34, 197, 94, 0.3)" }
     : lastTradeReceipt?.status === "failed"
-    ? { color: "#f87171", background: "rgba(239, 68, 68, 0.12)", border: "rgba(239, 68, 68, 0.3)" }
-    : { color: "#fbbf24", background: "rgba(251, 191, 36, 0.12)", border: "rgba(251, 191, 36, 0.3)" };
+    ? { color: "#f87171", background: "var(--surface-2)", badgeBackground: "var(--surface-3)", border: "rgba(239, 68, 68, 0.3)" }
+    : { color: "#fbbf24", background: "var(--surface-2)", badgeBackground: "var(--surface-3)", border: "rgba(251, 191, 36, 0.3)" };
   const validBuyAmount = Number.isFinite(Number(amountPerWallet)) && Number(amountPerWallet) > 0;
   const validSlippage = Number.isFinite(Number(slippage)) && Number(slippage) >= 0 && Number(slippage) <= 50;
   const canExecute = !executing && Boolean(sessionToken) && networkSessionReady && !isAirGapped && isSolana &&
@@ -835,12 +835,12 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
             <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
               <span
                 style={{
-                  fontSize: "11px",
+                  fontSize: "12px",
                   fontWeight: 700,
                   textTransform: "uppercase",
                   padding: "3px 8px",
                   borderRadius: "4px",
-                  background: receiptAccent.background,
+                  background: receiptAccent.badgeBackground,
                   color: receiptAccent.color,
                 }}
               >
@@ -868,32 +868,32 @@ export function DexBatchTrader({ wallet, active = true, onBusyChange }: DexBatch
 
           <div style={{ maxHeight: 260, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
             {lastTradeReceipt.wallets.map((entry, index) => (
-              <div key={`${entry.walletAddress}-${entry.txHash || index}`} style={{ padding: "8px 10px", borderRadius: 6, background: "rgba(0,0,0,0.16)", display: "flex", flexDirection: "column", gap: 4 }}>
+              <div key={`${entry.walletAddress}-${entry.txHash || index}`} style={{ padding: "8px 10px", borderRadius: 6, background: "var(--surface-inset)", border: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: 4 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-                  <span className="mono" style={{ fontSize: 11, color: "var(--text-main)" }}>{shortAddr(entry.walletAddress)}</span>
-                  <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: entry.status === "confirmed" ? "#4ade80" : entry.status === "pending" ? "#fbbf24" : "#f87171" }}>
+                  <span className="mono" style={{ fontSize: 12, color: "var(--text-main)" }}>{shortAddr(entry.walletAddress)}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", color: entry.status === "confirmed" ? "#4ade80" : entry.status === "pending" ? "#fbbf24" : "#f87171" }}>
                     {entry.status === "confirmed" ? "Confirmed" : entry.status === "pending" ? "Pending" : "Failed"}
                   </span>
                 </div>
-                {entry.amountSent && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{entry.amountSent}</span>}
+                {entry.amountSent && <span style={{ fontSize: 12, color: "var(--text-muted)" }}>{entry.amountSent}</span>}
                 {entry.txHash && (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    <span className="mono" style={{ fontSize: 10, color: "var(--accent)", wordBreak: "break-all" }}>{entry.txHash}</span>
-                    {entry.explorerUrl && <a href={entry.explorerUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: "#60a5fa", textDecoration: "underline" }}>Open in explorer ↗</a>}
+                    <span className="mono" style={{ fontSize: 11, color: "var(--accent)", wordBreak: "break-all" }}>{entry.txHash}</span>
+                    {entry.explorerUrl && <a href={entry.explorerUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: "#60a5fa", textDecoration: "underline" }}>Open in explorer ↗</a>}
                   </div>
                 )}
-                {entry.error && <span style={{ fontSize: 11, color: "#f87171", overflowWrap: "anywhere" }}>{entry.error}</span>}
+                {entry.error && <span style={{ fontSize: 12, color: "#f87171", overflowWrap: "anywhere" }}>{entry.error}</span>}
               </div>
             ))}
           </div>
 
           {lastTradeReceipt.status === "confirmed" && (
-            <div style={{ fontSize: "11px", color: "#4ade80" }}>
+            <div style={{ fontSize: "12px", color: "#4ade80" }}>
               Confirmed swaps will refresh wallet balances and token holdings shortly.
             </div>
           )}
           {lastTradeReceipt.pendingWallets > 0 && (
-            <div style={{ fontSize: "11px", color: "#fbbf24" }}>
+            <div style={{ fontSize: "12px", color: "#fbbf24" }}>
               Submitted transactions are not shown as confirmed. Check the explorer links; a delayed rescan has been scheduled.
             </div>
           )}
