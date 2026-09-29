@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10141b">
+  <title>Trade Workspace — Structure Proposal</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #10141b;
+      --sidebar: #131922;
+      --surface: #171e28;
+      --surface-raised: #1c2531;
+      --surface-inset: #111720;
+      --line: #2b3543;
+      --line-strong: #3a4758;
+      --text: #e8edf4;
+      --muted: #9aa7b8;
+      --subtle: #6d7b8e;
+      --accent: #a9c8ff;
+      --green: #65d6a1;
+      --amber: #efc875;
+      --red: #f18c8c;
+      --radius: 14px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body { min-width: 320px; margin: 0; background: var(--bg); color: var(--text); }
+    button, input, select { color: inherit; font: inherit; }
+    button { cursor: pointer; }
+    button:focus-visible, input:focus-visible, select:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .app-shell { min-height: 100vh; display: grid; grid-template-columns: 224px minmax(0, 1fr); }
+    .sidebar {
+      display: flex; flex-direction: column; gap: 26px; padding: 22px 14px;
+      border-right: 1px solid #252e39; background: var(--sidebar);
+    }
+    .brand { display: flex; align-items: center; gap: 10px; padding: 0 7px; }
+    .brand-mark {
+      display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px;
+      background: linear-gradient(145deg, #dce3ec, #8999ae); color: #161c25; font-size: 12px; font-weight: 900;
+    }
+    .brand-name { font-size: 11px; font-weight: 850; letter-spacing: .14em; }
+    .brand-caption { display: block; margin-top: 4px; color: var(--subtle); font-size: 8px; font-weight: 750; letter-spacing: .13em; }
+    .nav-label { padding: 0 10px; color: var(--subtle); font-size: 9px; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
+    .nav-list { display: grid; gap: 5px; margin-top: -18px; }
+    .nav-item {
+      display: flex; align-items: center; gap: 11px; min-height: 39px; padding: 8px 11px;
+      border: 1px solid transparent; border-radius: 9px; color: var(--muted); font-size: 12px; font-weight: 650;
+    }
+    .nav-item.active { border-color: #3b4655; background: #222b37; color: var(--text); }
+    .nav-icon { display: inline-grid; place-items: center; width: 18px; color: #91a0b2; font-size: 14px; }
+    .sidebar-note {
+      margin-top: auto; padding: 12px; border: 1px solid var(--line); border-radius: 11px; background: #111720;
+    }
+    .sidebar-note strong { display: block; margin-bottom: 6px; color: var(--green); font-size: 9px; letter-spacing: .08em; }
+    .sidebar-note p { margin: 0; color: var(--subtle); font-size: 10px; line-height: 1.55; }
+
+    .main { width: 100%; max-width: 1480px; margin: 0 auto; padding: 27px clamp(18px, 3.1vw, 46px) 46px; }
+    .topline { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 29px; }
+    .breadcrumb { color: var(--subtle); font-size: 10px; font-weight: 750; letter-spacing: .08em; text-transform: uppercase; }
+    .breadcrumb b { color: var(--muted); }
+    .mock-badge, .session-badge {
+      display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 999px;
+      background: var(--surface); white-space: nowrap;
+    }
+    .mock-badge { padding: 7px 10px; border-color: rgba(239, 200, 117, .29); color: var(--amber); font-size: 9px; font-weight: 850; letter-spacing: .06em; }
+    .session-badge { padding: 8px 11px; color: var(--muted); font-size: 10px; font-weight: 700; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; box-shadow: 0 0 9px currentColor; }
+    .session-badge .status-dot { color: var(--amber); }
+
+    .page-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; margin-bottom: 25px; }
+    .eyebrow { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; color: var(--muted); font-size: 9px; font-weight: 850; letter-spacing: .15em; }
+    .eyebrow::before { width: 19px; height: 2px; background: var(--green); content: ""; }
+    h1 { margin: 0 0 8px; font-size: clamp(26px, 3vw, 36px); line-height: 1.06; letter-spacing: -.045em; }
+    .page-heading p { max-width: 690px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+
+    .flow-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 18px; }
+    .flow-tab {
+      display: flex; align-items: center; gap: 12px; min-height: 72px; padding: 12px 15px;
+      border: 1px solid var(--line); border-radius: 12px; background: var(--surface); text-align: left;
+      transition: border-color .15s ease, background .15s ease, transform .15s ease;
+    }
+    .flow-tab:hover { border-color: var(--line-strong); transform: translateY(-1px); }
+    .flow-tab[aria-selected="true"] { border-color: rgba(101, 214, 161, .44); background: linear-gradient(110deg, rgba(101, 214, 161, .09), rgba(169, 200, 255, .035)); }
+    .flow-icon { display: grid; place-items: center; width: 36px; height: 36px; flex: 0 0 36px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-inset); color: var(--green); font-size: 16px; }
+    .flow-copy { min-width: 0; flex: 1; }
+    .flow-copy strong { display: block; margin-bottom: 4px; font-size: 12px; }
+    .flow-copy small { display: block; color: var(--muted); font-size: 10px; line-height: 1.4; }
+    .flow-arrow { color: var(--subtle); }
+
+    .workspace-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(300px, .82fr); align-items: start; gap: 15px; }
+    .setup-column, .review-column { display: grid; gap: 13px; min-width: 0; }
+    .review-column { position: sticky; top: 18px; }
+    .card { min-width: 0; padding: 17px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: 0 14px 38px rgba(0, 0, 0, .17); }
+    .card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+    .card-title { display: flex; align-items: center; gap: 9px; margin: 0; font-size: 12px; font-weight: 800; }
+    .step-number { display: grid; place-items: center; width: 23px; height: 23px; flex: 0 0 23px; border: 1px solid #3a4756; border-radius: 7px; background: #222c38; color: #c8d1de; font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .card-description { margin: 5px 0 0 32px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+    .section-label { display: block; margin-bottom: 7px; color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+
+    .segmented { display: inline-flex; gap: 4px; padding: 4px; border: 1px solid #293441; border-radius: 9px; background: var(--surface-inset); }
+    .segmented button { min-height: 31px; padding: 6px 11px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--muted); font-size: 10px; font-weight: 750; white-space: nowrap; }
+    .segmented button[aria-pressed="true"] { border-color: #465365; background: #27313e; color: var(--text); }
+    .segment-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .selection-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; padding: 11px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-inset); }
+    .selection-summary strong { display: block; font-size: 11px; }
+    .selection-summary small { display: block; margin-top: 4px; color: var(--muted); font-size: 9px; }
+    .count-pill { padding: 5px 8px; border: 1px solid rgba(101, 214, 161, .25); border-radius: 999px; background: rgba(101, 214, 161, .07); color: var(--green); font-size: 9px; font-weight: 800; white-space: nowrap; }
+
+    .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; }
+    .field { display: grid; gap: 7px; min-width: 0; }
+    .field.full { grid-column: 1 / -1; }
+    .label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    label { color: var(--muted); font-size: 9px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+    .field-hint { color: var(--subtle); font-size: 9px; }
+    input, select {
+      width: 100%; min-width: 0; min-height: 39px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 9px;
+      background: var(--surface-inset); color: var(--text); font-size: 11px;
+    }
+    input::placeholder { color: #647286; }
+    .input-with-suffix { position: relative; }
+    .input-with-suffix input { padding-right: 52px; }
+    .input-suffix { position: absolute; top: 50%; right: 12px; color: var(--subtle); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; transform: translateY(-50%); }
+    .chain-select { display: flex; align-items: center; justify-content: space-between; min-height: 42px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-inset); }
+    .chain-name { display: flex; align-items: center; gap: 9px; font-size: 11px; font-weight: 750; }
+    .chain-token { display: grid; place-items: center; width: 23px; height: 23px; border: 1px solid #3d4958; border-radius: 7px; background: #202a36; color: var(--accent); font-size: 9px; font-weight: 850; }
+    .chain-status { color: var(--amber); font-size: 9px; font-weight: 700; }
+    .helper-text { margin: 7px 0 0; color: var(--subtle); font-size: 9px; line-height: 1.5; }
+
+    .funding-box { margin-top: 14px; padding: 12px; border: 1px solid rgba(239, 200, 117, .2); border-radius: 11px; background: rgba(239, 200, 117, .035); }
+    .funding-box .segment-row { align-items: flex-start; }
+    .funding-description { max-width: 340px; margin: 7px 0 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
+    .wallet-list { display: grid; gap: 8px; margin-top: 12px; }
+    .wallet-row { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 10px 11px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-inset); }
+    .wallet-check { width: 15px; height: 15px; accent-color: var(--green); flex: 0 0 15px; }
+    .wallet-avatar { display: grid; place-items: center; width: 27px; height: 27px; flex: 0 0 27px; border: 1px solid #3b4654; border-radius: 8px; background: #222b36; color: #c8d1de; font-size: 9px; font-weight: 800; }
+    .wallet-info { min-width: 0; flex: 1; }
+    .wallet-info strong { display: block; overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+    .wallet-info small { display: block; margin-top: 3px; color: var(--subtle); font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .wallet-balance { color: var(--green); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
+    .wallet-balance.low { color: var(--red); }
+    .wallet-section-note { margin: 10px 0 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
+
+    .review-card { border-color: #344151; }
+    .review-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 14px; }
+    .review-heading h2 { margin: 0 0 5px; font-size: 14px; }
+    .review-heading p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .review-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 7px; border: 1px solid rgba(239, 200, 117, .24); border-radius: 999px; background: rgba(239, 200, 117, .06); color: var(--amber); font-size: 8px; font-weight: 800; white-space: nowrap; }
+    .review-items { display: grid; gap: 0; margin: 0; }
+    .review-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid #26303b; font-size: 10px; }
+    .review-item dt { color: var(--muted); }
+    .review-item dd { margin: 0; color: var(--text); font-weight: 750; text-align: right; }
+    .review-item dd.subtle { color: var(--amber); }
+    .safety-note { display: flex; align-items: flex-start; gap: 9px; margin: 13px 0; padding: 10px; border: 1px solid rgba(239, 200, 117, .2); border-radius: 9px; background: rgba(239, 200, 117, .045); color: #d6c18e; font-size: 9px; line-height: 1.5; }
+    .safety-icon { display: grid; place-items: center; width: 16px; height: 16px; flex: 0 0 16px; border: 1px solid rgba(239, 200, 117, .35); border-radius: 50%; font-size: 9px; font-weight: 900; }
+    .primary-button { width: 100%; min-height: 42px; border: 1px solid #9be1bd; border-radius: 9px; background: linear-gradient(110deg, #b6e8ca, #80d4a7); color: #12241b; font-size: 11px; font-weight: 850; transition: filter .15s ease, transform .15s ease; }
+    .primary-button:hover { filter: brightness(1.06); transform: translateY(-1px); }
+    .button-caption { margin: 8px 0 0; color: var(--subtle); font-size: 9px; line-height: 1.45; text-align: center; }
+    .mock-footer { display: flex; align-items: flex-start; gap: 10px; margin-top: 15px; padding: 13px 15px; border: 1px dashed #394555; border-radius: 11px; color: var(--muted); font-size: 10px; line-height: 1.55; }
+    .mock-footer strong { color: var(--text); }
+    .footer-mark { color: var(--accent); font-size: 13px; }
+    .toast { position: fixed; right: 22px; bottom: 22px; z-index: 20; max-width: min(420px, calc(100vw - 32px)); padding: 12px 15px; border: 1px solid #445363; border-radius: 10px; background: #202a36; color: var(--text); font-size: 11px; line-height: 1.45; box-shadow: 0 12px 28px rgba(0, 0, 0, .35); opacity: 0; pointer-events: none; transform: translateY(8px); transition: .2s ease; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+    [hidden] { display: none !important; }
+
+    @media (max-width: 1050px) {
+      .app-shell { grid-template-columns: 190px minmax(0, 1fr); }
+      .workspace-grid { grid-template-columns: minmax(0, 1fr); }
+      .review-column { position: static; }
+      .review-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(230px, .8fr); column-gap: 20px; }
+      .review-heading, .review-items { grid-column: 1; }
+      .safety-note, .primary-button, .button-caption { grid-column: 2; }
+      .safety-note { grid-row: 1; align-self: start; margin-top: 0; }
+      .primary-button { grid-row: 2; align-self: end; }
+      .button-caption { grid-row: 3; }
+    }
+    @media (max-width: 700px) {
+      .app-shell { display: block; }
+      .sidebar { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 0 14px; padding: 12px 15px; border-right: 0; border-bottom: 1px solid #252e39; }
+      .brand { padding: 0; }
+      .nav-label, .sidebar-note { display: none; }
+      .nav-list { display: flex; justify-content: flex-end; gap: 4px; margin: 0; }
+      .nav-item { min-height: 35px; padding: 6px 8px; font-size: 10px; }
+      .nav-icon { width: 14px; }
+      .main { padding: 20px 14px 32px; }
+      .topline { margin-bottom: 22px; }
+      .page-heading { display: block; }
+      .session-badge { margin-top: 13px; }
+      .flow-tab { min-height: 66px; padding: 10px; gap: 8px; }
+      .flow-copy strong { font-size: 10px; }
+      .flow-copy small { font-size: 9px; }
+      .flow-arrow { display: none; }
+      .card { padding: 14px; }
+      .review-card { display: block; }
+      .safety-note { margin-top: 13px; }
+    }
+    @media (max-width: 480px) {
+      .nav-item { justify-content: center; min-width: 35px; padding: 6px; }
+      .nav-item span:last-child { display: none; }
+      .flow-tabs { gap: 7px; }
+      .flow-icon { width: 30px; height: 30px; flex-basis: 30px; }
+      .form-grid { grid-template-columns: minmax(0, 1fr); }
+      .field.full { grid-column: auto; }
+      .segment-row { align-items: flex-start; flex-direction: column; }
+      .funding-box .segment-row { flex-direction: row; align-items: center; }
+      .segmented button { padding-inline: 9px; }
+      .wallet-row { gap: 7px; padding: 9px; }
+      .wallet-balance { font-size: 9px; }
+      .mock-badge { font-size: 8px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Main navigation">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">A</div>
+        <div><span class="brand-name">APPVAULT</span><span class="brand-caption">SELF-CUSTODY</span></div>
+      </div>
+      <div class="nav-label">Workspace</div>
+      <nav class="nav-list" aria-label="Workspace">
+        <div class="nav-item"><span class="nav-icon" aria-hidden="true">◫</span><span>Overview</span></div>
+        <div class="nav-item"><span class="nav-icon" aria-hidden="true">▤</span><span>Portfolio</span></div>
+        <div class="nav-item active" aria-current="page"><span class="nav-icon" aria-hidden="true">⇄</span><span>Trade</span></div>
+        <div class="nav-item"><span class="nav-icon" aria-hidden="true">◷</span><span>Activity</span></div>
+        <div class="nav-item"><span class="nav-icon" aria-hidden="true">⚙</span><span>Settings</span></div>
+      </nav>
+      <div class="sidebar-note">
+        <strong>SECURITY GATES</strong>
+        <p>Vault session, Safe Mode, and network checks remain required before live access or transaction approval.</p>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div class="topline">
+        <div class="breadcrumb">Workspace <span aria-hidden="true">/</span> <b>Trade</b></div>
+        <span class="mock-badge"><span class="status-dot" aria-hidden="true"></span> Structure proposal · mockup only</span>
+      </div>
+
+      <header class="page-heading">
+        <div>
+          <div class="eyebrow">TRADE WORKSPACE</div>
+          <h1>Swap &amp; transfer</h1>
+          <p>Choose a workflow, configure its inputs, then review the destination, wallet scope, and fees in one place.</p>
+        </div>
+        <div class="session-badge"><span class="status-dot" aria-hidden="true"></span> Preview mode · no live connection</div>
+      </header>
+
+      <div class="flow-tabs" role="tablist" aria-label="Trade workflow">
+        <button class="flow-tab" id="tab-swap" type="button" role="tab" aria-selected="true" aria-controls="panel-swap" data-mode="swap">
+          <span class="flow-icon" aria-hidden="true">↗</span>
+          <span class="flow-copy"><strong>Swap</strong><small>Buy or sell tokens through a DEX route</small></span>
+          <span class="flow-arrow" aria-hidden="true">→</span>
+        </button>
+        <button class="flow-tab" id="tab-transfer" type="button" role="tab" aria-selected="false" aria-controls="panel-transfer" data-mode="transfer">
+          <span class="flow-icon" aria-hidden="true">⇄</span>
+          <span class="flow-copy"><strong>Transfer &amp; Sweep</strong><small>Send assets to one destination</small></span>
+          <span class="flow-arrow" aria-hidden="true">→</span>
+        </button>
+      </div>
+
+      <div class="workspace-grid">
+        <div class="setup-column">
+          <section class="flow-panel" id="panel-swap" role="tabpanel" aria-labelledby="tab-swap">
+            <section class="card">
+              <div class="card-heading">
+                <div>
+                  <h2 class="card-title"><span class="step-number">01</span> Wallet scope</h2>
+                  <p class="card-description">Choose one wallet or use only the wallets selected in Portfolio.</p>
+                </div>
+              </div>
+              <div class="segment-row">
+                <div class="segmented" role="group" aria-label="Wallet scope">
+                  <button type="button" data-scope="single" aria-pressed="false">Single wallet</button>
+                  <button type="button" data-scope="selected" aria-pressed="true">Portfolio selection</button>
+                </div>
+                <span class="field-hint">Solana only · mock data</span>
+              </div>
+              <div class="selection-summary">
+                <div><strong id="swap-selection-title">2 wallets selected · 2 eligible</strong><small id="swap-selection-detail">Selected wallets are shown below for review.</small></div>
+                <span class="count-pill" id="swap-eligibility">2 eligible</span>
+              </div>
+              <div class="wallet-list" aria-label="Selected wallets">
+                <label class="wallet-row">
+                  <input class="wallet-check" type="checkbox" checked aria-label="Select Wallet 01">
+                  <span class="wallet-avatar" aria-hidden="true">W1</span>
+                  <span class="wallet-info"><strong>Wallet 01</strong><small>7x9K…b2Qp</small></span>
+                  <span class="wallet-balance">0.42 SOL</span>
+                </label>
+                <label class="wallet-row">
+                  <input class="wallet-check" type="checkbox" checked aria-label="Select Wallet 04">
+                  <span class="wallet-avatar" aria-hidden="true">W4</span>
+                  <span class="wallet-info"><strong>Wallet 04</strong><small>8h2P…mK5n</small></span>
+                  <span class="wallet-balance">0.31 SOL</span>
+                </label>
+                <label class="wallet-row">
+                  <input class="wallet-check" type="checkbox" aria-label="Select Wallet 07">
+                  <span class="wallet-avatar" aria-hidden="true">W7</span>
+                  <span class="wallet-info"><strong>Wallet 07</strong><small>4cQ1…rV3z · not selected</small></span>
+                  <span class="wallet-balance low">0.000001 SOL</span>
+                </label>
+              </div>
+              <p class="wallet-section-note">Only selected wallets with a Solana address are included. Wallet balances shown here are illustrative.</p>
+            </section>
+
+            <section class="card" style="margin-top: 13px">
+              <div class="card-heading">
+                <div>
+                  <h2 class="card-title"><span class="step-number">02</span> Swap details</h2>
+                  <p class="card-description">Set the token, amount, and slippage before reviewing the swap.</p>
+                </div>
+                <span class="review-chip">Route not live-tested</span>
+              </div>
+
+              <div class="form-grid">
+                <div class="field">
+                  <span class="section-label">Network</span>
+                  <div class="chain-select"><span class="chain-name"><span class="chain-token">S</span> Solana</span><span class="chain-status">DEX route only</span></div>
+                </div>
+                <div class="field">
+                  <div class="label-row"><label for="mint">Token mint</label><span class="field-hint">Base58 address</span></div>
+                  <input id="mint" type="text" placeholder="Enter the exact token mint" autocomplete="off" spellcheck="false">
+                </div>
+                <div class="field full">
+                  <div class="label-row"><span class="section-label" style="margin: 0">Action</span><span class="field-hint">Choose buy or sell</span></div>
+                  <div class="segmented" role="group" aria-label="Swap action">
+                    <button type="button" data-action="buy" aria-pressed="true">Buy</button>
+                    <button type="button" data-action="sell" aria-pressed="false">Sell</button>
+                  </div>
+                </div>
+                <div class="field" id="amount-field">
+                  <div class="label-row"><label id="amount-label" for="amount">Buy amount per wallet</label><span class="field-hint">Selected wallets</span></div>
+                  <div class="input-with-suffix"><input id="amount" type="number" min="0" value="0.05" step="0.01"><span class="input-suffix">SOL</span></div>
+                </div>
+                <div class="field">
+                  <div class="label-row"><label for="slippage">Slippage</label><span class="field-hint">0–50%</span></div>
+                  <div class="input-with-suffix"><input id="slippage" type="number" min="0" max="50" value="1.0" step="0.1"><span class="input-suffix">%</span></div>
+                </div>
+              </div>
+
+              <div class="funding-box" id="funding-box">
+                <div class="segment-row">
+                  <div>
+                    <span class="section-label" style="margin: 0">Batch buy funding</span>
+                    <p class="funding-description">Choose whether each wallet funds its own swap or one wallet funds the batch.</p>
+                  </div>
+                  <div class="segmented" role="group" aria-label="Batch buy funding source">
+                    <button type="button" data-funding="self" aria-pressed="true">Each wallet</button>
+                    <button type="button" data-funding="master" aria-pressed="false">Master wallet</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </section>
+
+          <section class="flow-panel" id="panel-transfer" role="tabpanel" aria-labelledby="tab-transfer" hidden>
+            <section class="card">
+              <div class="card-heading">
+                <div>
+                  <h2 class="card-title"><span class="step-number">01</span> Network &amp; asset</h2>
+                  <p class="card-description">Select the asset and network for this transfer.</p>
+                </div>
+              </div>
+              <div class="form-grid">
+                <div class="field">
+                  <span class="section-label">Network</span>
+                  <div class="chain-select"><span class="chain-name"><span class="chain-token">S</span> Solana</span><span class="chain-status">Selected</span></div>
+                </div>
+                <div class="field">
+                  <label for="asset">Asset</label>
+                  <select id="asset"><option>SOL · Native asset</option><option>USDC · SPL token</option><option>JUP · SPL token</option></select>
+                </div>
+              </div>
+            </section>
+
+            <section class="card" style="margin-top: 13px">
+              <div class="card-heading">
+                <div>
+                  <h2 class="card-title"><span class="step-number">02</span> Destination</h2>
+                  <p class="card-description">Enter one destination address for the selected source wallets.</p>
+                </div>
+              </div>
+              <div class="field">
+                <div class="label-row"><label for="recipient">Recipient address</label><span class="field-hint">Solana</span></div>
+                <input id="recipient" type="text" placeholder="Paste a Solana address" autocomplete="off" spellcheck="false">
+                <p class="helper-text">Verify the full address before continuing. Transfers cannot be reversed after broadcast.</p>
+              </div>
+            </section>
+
+            <section class="card" style="margin-top: 13px">
+              <div class="card-heading">
+                <div>
+                  <h2 class="card-title"><span class="step-number">03</span> Sources &amp; fees</h2>
+                  <p class="card-description">Review wallet readiness and choose how network fees are covered.</p>
+                </div>
+                <span class="count-pill">2 ready · 1 not ready</span>
+              </div>
+              <div class="wallet-list">
+                <div class="wallet-row"><span class="wallet-avatar" aria-hidden="true">W1</span><span class="wallet-info"><strong>Wallet 01</strong><small>Source wallet · ready</small></span><span class="wallet-balance">0.42 SOL</span></div>
+                <div class="wallet-row"><span class="wallet-avatar" aria-hidden="true">W4</span><span class="wallet-info"><strong>Wallet 04</strong><small>Source wallet · ready</small></span><span class="wallet-balance">0.18 SOL</span></div>
+                <div class="wallet-row"><span class="wallet-avatar" aria-hidden="true">W7</span><span class="wallet-info"><strong>Wallet 07</strong><small>Insufficient SOL for estimated fee</small></span><span class="wallet-balance low">0.000001 SOL</span></div>
+              </div>
+              <div class="funding-box">
+                <div class="segment-row">
+                  <div><span class="section-label" style="margin: 0">Network fee payer</span><p class="funding-description">A fee-payer wallet can cover fees for eligible source wallets.</p></div>
+                  <div class="segmented" role="group" aria-label="Network fee payer">
+                    <button type="button" data-transfer-fee="self" aria-pressed="true">Each source</button>
+                    <button type="button" data-transfer-fee="master" aria-pressed="false">Fee payer wallet</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </section>
+        </div>
+
+        <aside class="review-column" aria-label="Transaction review">
+          <section class="card review-card">
+            <div class="review-heading">
+              <div><h2 id="review-title">Swap review</h2><p id="review-description">Check the wallet scope and inputs before continuing.</p></div>
+              <span class="review-chip" id="review-status">Mock preview</span>
+            </div>
+            <dl class="review-items" id="swap-review">
+              <div class="review-item"><dt>Network</dt><dd>Solana</dd></div>
+              <div class="review-item"><dt>Action</dt><dd id="summary-action">Buy token</dd></div>
+              <div class="review-item"><dt>Wallet scope</dt><dd id="summary-scope">2 selected · 2 eligible</dd></div>
+              <div class="review-item"><dt>Amount</dt><dd id="summary-amount">0.05 SOL per wallet</dd></div>
+              <div class="review-item"><dt>Funding</dt><dd id="summary-funding">Each wallet</dd></div>
+              <div class="review-item"><dt>Slippage</dt><dd id="summary-slippage">1.0%</dd></div>
+              <div class="review-item"><dt>DEX route</dt><dd class="subtle">Jupiter · not live-tested</dd></div>
+            </dl>
+            <dl class="review-items" id="transfer-review" hidden>
+              <div class="review-item"><dt>Network</dt><dd>Solana</dd></div>
+              <div class="review-item"><dt>Asset</dt><dd id="summary-asset">SOL</dd></div>
+              <div class="review-item"><dt>Source wallets</dt><dd>2 of 3 ready</dd></div>
+              <div class="review-item"><dt>Recipient</dt><dd id="summary-recipient">Not entered</dd></div>
+              <div class="review-item"><dt>Fee payer</dt><dd id="summary-fee-payer">Each source</dd></div>
+              <div class="review-item"><dt>Estimated net</dt><dd>0.599990 SOL</dd></div>
+            </dl>
+            <div class="safety-note"><span class="safety-icon" aria-hidden="true">!</span><span id="safety-copy">No quote is requested in this mockup. Check the exact mint, amount, wallet scope, and route status before any live approval.</span></div>
+            <button class="primary-button" id="review-button" type="button">Review swap</button>
+            <p class="button-caption">The next step should show a vault-controlled confirmation prompt.</p>
+          </section>
+          <div class="mock-footer"><span class="footer-mark" aria-hidden="true">◆</span><span><strong>Concept only.</strong> This mockup makes no network requests, accesses no wallet secrets, and does not sign or submit transactions. Keep vault-session, Safe Mode, and network gates in the implementation.</span></div>
+        </aside>
+      </div>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      const modeTabs = [...document.querySelectorAll("[data-mode]")];
+      const swapPanel = document.getElementById("panel-swap");
+      const transferPanel = document.getElementById("panel-transfer");
+      const swapReview = document.getElementById("swap-review");
+      const transferReview = document.getElementById("transfer-review");
+      const reviewButton = document.getElementById("review-button");
+      const toast = document.getElementById("toast");
+      let mode = "swap";
+      let action = "buy";
+      let scope = "selected";
+      let funding = "self";
+      let feePayer = "self";
+      let toastTimer;
+
+      function showToast(message) {
+        toast.textContent = message;
+        toast.classList.add("show");
+        window.clearTimeout(toastTimer);
+        toastTimer = window.setTimeout(() => toast.classList.remove("show"), 3200);
+      }
+
+      function updateReview() {
+        const walletBoxes = [...document.querySelectorAll(".wallet-check")];
+        const selectedCount = walletBoxes.filter((box) => box.checked).length;
+        const eligibleCount = walletBoxes.filter((box, index) => box.checked && index < 2).length;
+        document.getElementById("swap-selection-title").textContent = `${selectedCount} ${selectedCount === 1 ? "wallet" : "wallets"} selected · ${eligibleCount} eligible`;
+        document.getElementById("swap-eligibility").textContent = `${eligibleCount} eligible`;
+        document.getElementById("summary-action").textContent = action === "buy" ? "Buy token" : "Sell token for SOL";
+        document.getElementById("summary-scope").textContent = `${selectedCount} selected · ${eligibleCount} eligible`;
+        const amount = document.getElementById("amount").value || "0";
+        document.getElementById("amount-label").textContent = action === "buy"
+          ? (scope === "single" ? "Buy amount" : "Buy amount per wallet")
+          : "Token balance";
+        document.getElementById("summary-amount").textContent = action === "sell"
+          ? "Selected token balances"
+          : scope === "single" ? `${amount} SOL` : `${amount} SOL per wallet`;
+        document.getElementById("summary-funding").textContent = funding === "self" ? "Each wallet" : "Master wallet";
+        document.getElementById("summary-slippage").textContent = `${document.getElementById("slippage").value || "0"}%`;
+        document.getElementById("summary-asset").textContent = document.getElementById("asset").value.split(" · ")[0];
+        const recipient = document.getElementById("recipient").value.trim();
+        document.getElementById("summary-recipient").textContent = recipient ? `${recipient.slice(0, 6)}…${recipient.slice(-4)}` : "Not entered";
+        document.getElementById("summary-fee-payer").textContent = feePayer === "self" ? "Each source" : "Fee payer wallet";
+
+        const isSwap = mode === "swap";
+        document.getElementById("review-title").textContent = isSwap ? "Swap review" : "Transfer review";
+        document.getElementById("review-description").textContent = isSwap
+          ? "Check the wallet scope and inputs before continuing."
+          : "Verify the destination, source wallets, and fee details.";
+        document.getElementById("review-status").textContent = isSwap ? "DEX route · not live-tested" : "Mock fee estimate";
+        document.getElementById("safety-copy").textContent = isSwap
+          ? "No quote is requested in this mockup. Check the exact mint, amount, wallet scope, and route status before any live approval."
+          : "Verify the full recipient address and estimated fees. Ineligible wallets should be excluded before the vault confirmation step.";
+        reviewButton.textContent = isSwap ? "Review swap" : "Review transfer";
+        swapPanel.hidden = !isSwap;
+        transferPanel.hidden = isSwap;
+        swapReview.hidden = !isSwap;
+        transferReview.hidden = isSwap;
+      }
+
+      modeTabs.forEach((tab) => tab.addEventListener("click", () => {
+        mode = tab.dataset.mode;
+        modeTabs.forEach((item) => {
+          const selected = item === tab;
+          item.setAttribute("aria-selected", String(selected));
+          item.tabIndex = selected ? 0 : -1;
+        });
+        updateReview();
+      }));
+
+      document.querySelectorAll("[data-scope]").forEach((button) => button.addEventListener("click", () => {
+        scope = button.dataset.scope;
+        document.querySelectorAll("[data-scope]").forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
+        document.querySelectorAll(".wallet-check").forEach((checkbox, index) => {
+          checkbox.checked = scope === "single" ? index === 0 : index < 2;
+        });
+        document.getElementById("swap-selection-detail").textContent = scope === "single" ? "Only the active wallet is included in this swap." : "Only Portfolio-selected wallets are included.";
+        document.getElementById("funding-box").hidden = action !== "buy" || scope !== "selected";
+        updateReview();
+      }));
+
+      document.querySelectorAll("[data-action]").forEach((button) => button.addEventListener("click", () => {
+        action = button.dataset.action;
+        document.querySelectorAll("[data-action]").forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
+        document.getElementById("amount-field").hidden = action !== "buy";
+        document.getElementById("funding-box").hidden = action !== "buy" || scope !== "selected";
+        updateReview();
+      }));
+
+      document.querySelectorAll("[data-funding]").forEach((button) => button.addEventListener("click", () => {
+        funding = button.dataset.funding;
+        document.querySelectorAll("[data-funding]").forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
+        updateReview();
+      }));
+
+      document.querySelectorAll("[data-transfer-fee]").forEach((button) => button.addEventListener("click", () => {
+        feePayer = button.dataset.transferFee;
+        document.querySelectorAll("[data-transfer-fee]").forEach((item) => item.setAttribute("aria-pressed", String(item === button)));
+        updateReview();
+      }));
+
+      ["amount", "slippage", "recipient", "asset"].forEach((id) => {
+        document.getElementById(id).addEventListener("input", updateReview);
+        document.getElementById(id).addEventListener("change", updateReview);
+      });
+
+      reviewButton.addEventListener("click", () => {
+        showToast("Concept mockup only — no wallet access, quote, signature, or transaction was requested.");
+      });
+      document.querySelectorAll(".wallet-check").forEach((checkbox) => checkbox.addEventListener("change", () => {
+        if (scope === "single" && checkbox.checked) {
+          document.querySelectorAll(".wallet-check").forEach((other) => {
+            if (other !== checkbox) other.checked = false;
+          });
+        }
+        updateReview();
+        showToast("Wallet selection is illustrative in this mockup.");
+      }));
+
+      modeTabs[0].tabIndex = 0;
+      modeTabs[1].tabIndex = -1;
+      updateReview();
+    })();
+  </script>
+</body>
+</html>
