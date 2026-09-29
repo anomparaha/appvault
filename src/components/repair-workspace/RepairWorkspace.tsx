@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useApp } from "../../context/AppContext";
-import { FundedWalletModal } from "../FundedWalletModal";
+import { FundedWalletModal } from "../modals/FundedWalletModal";
 import { IconArrowLeft } from "../../icons";
 import { useMnemonicAnalysis } from "./hooks/useMnemonicAnalysis";
 import { useOnTheFlyScan } from "./hooks/useOnTheFlyScan";
@@ -210,7 +210,7 @@ export const RepairWorkspace: React.FC<RepairWorkspaceProps> = ({
         targetMatch: null,
         recentSolutions: [],
       });
-      toast(`🚀 100% In-Memory search session #${rec.sessionId.slice(0, 8)} started! Live balance auto-scan active in RAM.`, "info");
+      toast(`Recovery search session #${rec.sessionId.slice(0, 8)} started. Save any result you want to keep.`, "info");
     } catch (err) {
       toast(`Failed to start session: ${String(err)}`, "error");
     }
@@ -444,7 +444,7 @@ export const RepairWorkspace: React.FC<RepairWorkspaceProps> = ({
         </div>
       </div>
 
-      {/* 2. Zero-Knowledge & Transposition Alerts */}
+      {/* 2. Local search & transposition information */}
       <RayonMetricsBar analysis={analysis} onApplySolution={handleApplySolution} />
 
       {/* 3. Persistent Session Tracker (active if toggled open or session is running) */}

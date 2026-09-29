@@ -12,14 +12,14 @@ import {
   getExistingFingerprints,
   getExistingAddresses,
   verifyMasterPasswordNative,
-} from "../../lib/db";
+} from "../../lib/db/db";
 import {
   chainsForWallet,
   hasFundsForWallet,
   totalBalanceForWallet,
-} from "../../lib/chains";
-import { walletFingerprint } from "../../lib/fingerprint";
-import { smartNormalizeInputNative } from "../../lib/extract";
+} from "../../lib/chains/chains";
+import { walletFingerprint } from "../../lib/crypto/fingerprint";
+import { smartNormalizeInputNative } from "../../lib/wallets/extract";
 import {
   classify,
   deriveDualCredentialsNative,
@@ -27,9 +27,10 @@ import {
   derivePublicAddressesBatchNative,
   walletHasScanTarget,
   type DualCredentials,
-} from "../../lib/wallet";
-import { logActivity } from "../../lib/activity";
-import type { ToastType, WalletView } from "../../lib/types";
+} from "../../lib/wallets/wallet";
+import { logActivity } from "../../lib/services/activity";
+import type { WalletView } from "../../lib/types/index";
+import type { ToastType } from "../../context/types/toast";
 
 export interface ExportOptions {
   format: "txt" | "csv";
@@ -43,7 +44,7 @@ interface UseWalletOperationsProps {
   sessionToken: string;
   setSelectedId: React.Dispatch<React.SetStateAction<number | null>>;
   setSelectedSweepIds: React.Dispatch<React.SetStateAction<Set<number>>>;
-  scanWallets?: (targets: WalletView[]) => Promise<{ funded: number; errors: number }>;
+  scanWallets?: (targets: WalletView[]) => Promise<{ funded: number; errors: number; started?: boolean; cancelled?: boolean }>;
   getUsd?: (symbol: string) => number;
 }
 
@@ -297,7 +298,8 @@ export function useWalletOperations({
       if (targets.length > 0) {
         toast(`Import complete. Scanning ${targets.length} newly added wallets…`, "info");
         scanWallets(targets)
-          .then(({ funded, errors }) => {
+          .then(({ funded, errors, started, cancelled }) => {
+            if (started === false || cancelled) return;
             if (errors > 0) {
               toast(`Scan complete · ${funded} funded · ${errors} chains failed`, funded > 0 ? "success" : "error");
             } else {

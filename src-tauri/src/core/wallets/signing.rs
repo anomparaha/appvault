@@ -16,7 +16,7 @@ pub struct EvmTxParams<'a> {
 
 /// Sign an EVM Legacy (Type 0 / EIP-155) transaction using a 32-byte private key.
 /// Returns standard raw transaction hex string ("0x...").
-/// The private key buffer is guaranteed zeroized on function return.
+/// The key buffer is borrowed from a caller-owned `Zeroizing` value; this function does not zeroize that caller-owned buffer.
 pub fn sign_evm_transaction(
     private_key: &Zeroizing<[u8; 32]>,
     params: &EvmTxParams<'_>,

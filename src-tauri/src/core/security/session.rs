@@ -97,6 +97,34 @@ impl SessionManager {
         }
     }
 
+    /// Check session validity without extending its idle timeout. Used by renderer
+    /// transports that need a short liveness probe without counting as user activity.
+    pub fn is_authenticated_without_touch(&self, session_token: &str) -> bool {
+        if session_token.is_empty() {
+            return false;
+        }
+        let mut guard = self.session.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(session) = guard.as_ref() else {
+            return false;
+        };
+        if session.session_token != session_token {
+            return false;
+        }
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        let expired = now.saturating_sub(session.last_activity_sec) >= session.timeout_seconds;
+        if expired {
+            *guard = None;
+            #[cfg(not(test))]
+            let _ = crate::core::wallets::recovery_session::clear_recovery_session("");
+            return false;
+        }
+        true
+    }
+
     /// Check if there is an active valid session matching the provided token
     pub fn is_authenticated(&self, session_token: &str) -> bool {
         if session_token.is_empty() {
@@ -226,6 +254,25 @@ mod tests {
 
         let retrieved_key = sm.get_master_key(&token).expect("Valid token should succeed");
         assert_eq!(retrieved_key.as_str(), password);
+    }
+
+    #[test]
+    fn test_read_only_auth_check_does_not_extend_idle_timeout() {
+        let sm = SessionManager::new(60);
+        let token = sm.unlock("ReadOnlyPassword".to_string(), None);
+        let original_activity = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            .saturating_sub(10);
+        {
+            let mut guard = sm.session.lock().unwrap();
+            guard.as_mut().unwrap().last_activity_sec = original_activity;
+        }
+
+        assert!(sm.is_authenticated_without_touch(&token));
+        let guard = sm.session.lock().unwrap();
+        assert_eq!(guard.as_ref().unwrap().last_activity_sec, original_activity);
     }
 
     #[test]

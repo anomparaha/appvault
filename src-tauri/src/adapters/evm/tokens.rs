@@ -158,12 +158,6 @@ pub const ARB_TOKENS: &[TokenDef] = &[
 
 pub const ROBINHOOD_TOKENS: &[TokenDef] = &[
     TokenDef {
-        symbol: "$PLUR",
-        name: "Plurivex",
-        contract: "0xf890d3fe2be22c6259bbe9f607692c7168556c93",
-        decimals: 18,
-    },
-    TokenDef {
         symbol: "PLX",
         name: "Plurivex",
         contract: "0x2411cfb697efc0efd32a4e98f7be5ba098b671a5",

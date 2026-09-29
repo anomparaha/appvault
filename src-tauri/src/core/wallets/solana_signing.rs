@@ -40,7 +40,7 @@ pub fn find_program_address(seeds: &[&[u8]], program_id: &[u8; 32]) -> Result<([
         for seed in seeds {
             hasher.update(seed);
         }
-        hasher.update(&[nonce]);
+        hasher.update([nonce]);
         hasher.update(program_id);
         hasher.update(b"ProgramDerivedAddress");
         let hash: [u8; 32] = hasher.finalize().into();
@@ -582,8 +582,213 @@ pub fn sign_solana_transfer_with_secrets(
     })
 }
 
-/// Signs an arbitrary compiled Solana Versioned Message (v0 or legacy) with zeroizing secret keys.
-/// Supports both single-signer (self-funded) and dual-signer (sponsored fee payer).
+fn read_message_shortvec(bytes: &[u8], cursor: &mut usize) -> Result<usize, String> {
+    let mut value = 0usize;
+    let mut shift = 0u32;
+    for byte_index in 0..3usize {
+        let byte = *bytes
+            .get(*cursor)
+            .ok_or_else(|| "Truncated Solana message shortvec".to_string())?;
+        *cursor += 1;
+        value |= usize::from(byte & 0x7f)
+            .checked_shl(shift)
+            .ok_or_else(|| "Solana message shortvec overflow".to_string())?;
+        if byte & 0x80 == 0 {
+            if value > u16::MAX as usize {
+                return Err("Solana message shortvec exceeds u16".to_string());
+            }
+            if byte_index > 0 && value < (1usize << (7 * byte_index)) {
+                return Err("Non-canonical Solana message shortvec".to_string());
+            }
+            return Ok(value);
+        }
+        shift += 7;
+    }
+    Err("Invalid or oversized Solana message shortvec".to_string())
+}
+
+fn consume_message_bytes(bytes: &[u8], cursor: &mut usize, count: usize) -> Result<(), String> {
+    let end = cursor
+        .checked_add(count)
+        .ok_or_else(|| "Solana message length overflow".to_string())?;
+    if end > bytes.len() {
+        return Err("Truncated Solana message".to_string());
+    }
+    *cursor = end;
+    Ok(())
+}
+
+/// The versioned signer is currently used only for Jupiter swaps. Keep the
+/// top-level program surface narrow; routers invoke pool programs by CPI.
+fn is_allowed_versioned_program(program_id: &[u8; 32]) -> bool {
+    const ALLOWED_PROGRAM_IDS: &[&str] = &[
+        "11111111111111111111111111111111", // System Program
+        "ComputeBudget111111111111111111111111111111",
+        "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+        "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+        "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4", // Jupiter v6
+        "MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr",
+        "Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo",
+    ];
+    let encoded = bs58::encode(program_id).into_string();
+    ALLOWED_PROGRAM_IDS.contains(&encoded.as_str())
+}
+
+/// Parse the static signer set, require the current DEX program allowlist, and verify the
+/// fee payer/source signers in Solana's canonical order. This is not a full transaction
+/// simulator or a replacement for user-facing transaction review.
+fn validate_versioned_message_signers(
+    message_bytes: &[u8],
+    fee_payer_pubkey: &[u8; 32],
+    source_pubkey: &[u8; 32],
+) -> Result<(), String> {
+    if message_bytes.is_empty() {
+        return Err("Empty transaction message bytes".to_string());
+    }
+    if message_bytes.len() > 1_232 {
+        return Err("Solana transaction message exceeds the packet-size limit".to_string());
+    }
+    let mut cursor = 0usize;
+    let versioned = message_bytes[0] & 0x80 != 0;
+    if versioned {
+        let version = message_bytes[0] & 0x7f;
+        if version != 0 {
+            return Err(format!("Unsupported Solana message version {version}"));
+        }
+        cursor += 1;
+    }
+
+    if message_bytes.len().saturating_sub(cursor) < 3 {
+        return Err("Truncated Solana message header".to_string());
+    }
+    let required_signatures = usize::from(message_bytes[cursor]);
+    let readonly_signed = usize::from(message_bytes[cursor + 1]);
+    let readonly_unsigned = usize::from(message_bytes[cursor + 2]);
+    cursor += 3;
+
+    let static_account_count = read_message_shortvec(message_bytes, &mut cursor)?;
+    if static_account_count == 0 || static_account_count > 256 {
+        return Err("Invalid Solana static account key count".to_string());
+    }
+    if required_signatures == 0 || required_signatures > static_account_count {
+        return Err("Invalid Solana required signature count".to_string());
+    }
+    if readonly_signed >= required_signatures || readonly_unsigned > static_account_count - required_signatures {
+        return Err("Invalid Solana message readonly account counts or fee payer is not writable".to_string());
+    }
+
+    let key_bytes = static_account_count
+        .checked_mul(32)
+        .ok_or_else(|| "Solana account key length overflow".to_string())?;
+    if message_bytes.len().saturating_sub(cursor) < key_bytes {
+        return Err("Truncated Solana static account keys".to_string());
+    }
+    let mut static_keys = Vec::with_capacity(static_account_count);
+    for _ in 0..static_account_count {
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&message_bytes[cursor..cursor + 32]);
+        static_keys.push(key);
+        cursor += 32;
+    }
+
+    let expected_signers: Vec<[u8; 32]> = if fee_payer_pubkey == source_pubkey {
+        vec![*fee_payer_pubkey]
+    } else {
+        vec![*fee_payer_pubkey, *source_pubkey]
+    };
+    if message_bytes.len() + 1 + (64 * expected_signers.len()) > 1_232 {
+        return Err("Signed Solana transaction exceeds the packet-size limit".to_string());
+    }
+    if required_signatures != expected_signers.len()
+        || static_keys.get(..required_signatures) != Some(expected_signers.as_slice())
+    {
+        return Err("Transaction signer set does not match the selected vault fee payer and source wallet".to_string());
+    }
+
+    // Blockhash and compiled instructions.
+    consume_message_bytes(message_bytes, &mut cursor, 32)?;
+    let instruction_count = read_message_shortvec(message_bytes, &mut cursor)?;
+    if instruction_count == 0 {
+        return Err("Solana transaction has no instructions".to_string());
+    }
+    if instruction_count > 256 {
+        return Err("Solana transaction contains too many instructions".to_string());
+    }
+    let mut program_indexes = Vec::with_capacity(instruction_count);
+    let mut account_indexes: Vec<u8> = Vec::new();
+    for _ in 0..instruction_count {
+        let program_index = *message_bytes
+            .get(cursor)
+            .ok_or_else(|| "Truncated Solana instruction program index".to_string())?;
+        cursor += 1;
+        program_indexes.push(usize::from(program_index));
+        let account_count = read_message_shortvec(message_bytes, &mut cursor)?;
+        if account_count > 256 {
+            return Err("Solana instruction contains too many account indexes".to_string());
+        }
+        let end = cursor
+            .checked_add(account_count)
+            .ok_or_else(|| "Solana instruction account index length overflow".to_string())?;
+        if end > message_bytes.len() {
+            return Err("Truncated Solana instruction account indexes".to_string());
+        }
+        account_indexes.extend_from_slice(&message_bytes[cursor..end]);
+        cursor = end;
+        let data_length = read_message_shortvec(message_bytes, &mut cursor)?;
+        consume_message_bytes(message_bytes, &mut cursor, data_length)?;
+    }
+
+    let loaded_account_count = if versioned {
+        let lookup_count = read_message_shortvec(message_bytes, &mut cursor)?;
+        if lookup_count > 256 {
+            return Err("Solana message contains too many address lookup tables".to_string());
+        }
+        let mut loaded_count = 0usize;
+        for _ in 0..lookup_count {
+            consume_message_bytes(message_bytes, &mut cursor, 32)?;
+            let writable_count = read_message_shortvec(message_bytes, &mut cursor)?;
+            consume_message_bytes(message_bytes, &mut cursor, writable_count)?;
+            let readonly_count = read_message_shortvec(message_bytes, &mut cursor)?;
+            consume_message_bytes(message_bytes, &mut cursor, readonly_count)?;
+            loaded_count = loaded_count
+                .checked_add(writable_count)
+                .and_then(|count| count.checked_add(readonly_count))
+                .ok_or_else(|| "Loaded Solana account count overflow".to_string())?;
+        }
+        loaded_count
+    } else {
+        0
+    };
+
+    if cursor != message_bytes.len() {
+        return Err("Unexpected trailing data in Solana message".to_string());
+    }
+    let total_account_count = static_account_count
+        .checked_add(loaded_account_count)
+        .ok_or_else(|| "Solana message account count overflow".to_string())?;
+    if total_account_count > 256 {
+        return Err("Solana message contains too many total account keys".to_string());
+    }
+    if account_indexes.iter().any(|index| usize::from(*index) >= total_account_count) {
+        return Err("Solana instruction references an invalid account index".to_string());
+    }
+    // Solana compilers keep invoked program ids in the static key list. Program ids
+    // must also be non-signers and part of the narrowly supported DEX instruction set.
+    if program_indexes.iter().any(|index| {
+        *index < required_signatures
+            || *index < static_account_count - readonly_unsigned
+            || *index >= static_account_count
+            || !is_allowed_versioned_program(&static_keys[*index])
+    }) {
+        return Err("Solana transaction contains an unsupported top-level program".to_string());
+    }
+
+    Ok(())
+}
+
+/// Signs a compiled Solana Versioned Message (v0 or legacy) only when the required
+/// signer set exactly matches the selected vault fee payer/source keys.
 /// Wire format: [num_signatures: compact-u16] + [signatures: 64 bytes each] + [message_bytes]
 pub fn sign_solana_versioned_message_with_secrets(
     fee_payer_secret: &str,
@@ -594,6 +799,9 @@ pub fn sign_solana_versioned_message_with_secrets(
 ) -> Result<SolanaSignResult, String> {
     if message_bytes.is_empty() {
         return Err("Empty transaction message bytes".to_string());
+    }
+    if message_bytes.len() > 1_232 {
+        return Err("Solana transaction message exceeds the packet-size limit".to_string());
     }
 
     // 1. Fee payer key
@@ -607,6 +815,7 @@ pub fn sign_solana_versioned_message_with_secrets(
     let source_pubkey = source_signing_key.verifying_key().to_bytes();
     let source_address = bs58::encode(&source_pubkey).into_string();
 
+    validate_versioned_message_signers(message_bytes, &fp_pubkey, &source_pubkey)?;
     let is_same_signer = fp_pubkey == source_pubkey;
 
     let wire_bytes = if is_same_signer {
@@ -846,64 +1055,110 @@ mod tests {
         assert!(raw_bytes.len() > 1 + 64);
     }
 
+    fn build_test_v0_message(signers: &[[u8; 32]]) -> Vec<u8> {
+        let compute_budget = parse_pubkey_32_bytes("ComputeBudget111111111111111111111111111111").unwrap();
+        let mut message = vec![0x80, signers.len() as u8, 0, 1];
+        encode_compact_u16((signers.len() + 1) as u16, &mut message);
+        for signer in signers {
+            message.extend_from_slice(signer);
+        }
+        message.extend_from_slice(&compute_budget);
+        message.extend_from_slice(&[7u8; 32]); // recent blockhash
+        encode_compact_u16(1, &mut message); // one Compute Budget instruction
+        message.push(signers.len() as u8); // static key index for the program id
+        encode_compact_u16(0, &mut message); // no instruction accounts
+        encode_compact_u16(5, &mut message);
+        message.extend_from_slice(&[2, 0, 0, 0, 0]); // SetComputeUnitLimit
+        encode_compact_u16(0, &mut message); // address lookup count
+        message
+    }
+
     #[test]
-    fn test_sign_solana_versioned_message_dual_and_single_signer() {
+    fn test_sign_solana_versioned_message_checks_signer_set() {
         let payer_seed = [1u8; 32];
         let payer_pk = hex::encode(payer_seed);
         let user_seed = [2u8; 32];
         let user_pk = hex::encode(user_seed);
+        let payer_key = EdSigningKey::from_bytes(&payer_seed).verifying_key().to_bytes();
+        let user_key = EdSigningKey::from_bytes(&user_seed).verifying_key().to_bytes();
 
-        let dummy_message = b"SOLANA_V0_MESSAGE_TEST_BYTES_ABC123";
-
-        // Dual signer (sponsored)
+        let dual_message = build_test_v0_message(&[payer_key, user_key]);
         let dual_res = sign_solana_versioned_message_with_secrets(
             &payer_pk,
             "pk",
             &user_pk,
             "pk",
-            dummy_message,
-        ).expect("Dual signer versioned message should succeed");
-
+            &dual_message,
+        ).expect("Valid dual-signer message should succeed");
         let dual_bytes = base64::engine::general_purpose::STANDARD
             .decode(&dual_res.raw_tx_base64)
             .unwrap();
-
-        // Byte 0 is compact-u16 number of signatures = 2
         assert_eq!(dual_bytes[0], 2);
-        // Sig0 (64 bytes) + Sig1 (64 bytes) + message
-        assert_eq!(dual_bytes.len(), 1 + 64 + 64 + dummy_message.len());
+        assert_eq!(&dual_bytes[129..], dual_message.as_slice());
 
-        let sig0 = &dual_bytes[1..65];
-        let sig1 = &dual_bytes[65..129];
-        let msg = &dual_bytes[129..];
-        assert_eq!(msg, dummy_message);
+        let sig0 = ed25519_dalek::Signature::from_slice(&dual_bytes[1..65]).unwrap();
+        let sig1 = ed25519_dalek::Signature::from_slice(&dual_bytes[65..129]).unwrap();
+        EdSigningKey::from_bytes(&payer_seed)
+            .verifying_key()
+            .verify_strict(&dual_message, &sig0)
+            .unwrap();
+        EdSigningKey::from_bytes(&user_seed)
+            .verifying_key()
+            .verify_strict(&dual_message, &sig1)
+            .unwrap();
 
-        // Verify cryptographic validity of both signatures
-        let fp_verifying_key = EdSigningKey::from_bytes(&payer_seed).verifying_key();
-        let user_verifying_key = EdSigningKey::from_bytes(&user_seed).verifying_key();
-
-        let sig0_parsed = ed25519_dalek::Signature::from_slice(sig0).unwrap();
-        let sig1_parsed = ed25519_dalek::Signature::from_slice(sig1).unwrap();
-
-        assert!(fp_verifying_key.verify_strict(dummy_message, &sig0_parsed).is_ok());
-        assert!(user_verifying_key.verify_strict(dummy_message, &sig1_parsed).is_ok());
-
-        // Single signer (self funded)
+        let single_message = build_test_v0_message(&[user_key]);
         let single_res = sign_solana_versioned_message_with_secrets(
             &user_pk,
             "pk",
             &user_pk,
             "pk",
-            dummy_message,
-        ).expect("Single signer versioned message should succeed");
-
+            &single_message,
+        ).expect("Valid single-signer message should succeed");
         let single_bytes = base64::engine::general_purpose::STANDARD
             .decode(&single_res.raw_tx_base64)
             .unwrap();
-
         assert_eq!(single_bytes[0], 1);
-        assert_eq!(single_bytes.len(), 1 + 64 + dummy_message.len());
-        let sig_single = ed25519_dalek::Signature::from_slice(&single_bytes[1..65]).unwrap();
-        assert!(user_verifying_key.verify_strict(dummy_message, &sig_single).is_ok());
+        let signature = ed25519_dalek::Signature::from_slice(&single_bytes[1..65]).unwrap();
+        EdSigningKey::from_bytes(&user_seed)
+            .verifying_key()
+            .verify_strict(&single_message, &signature)
+            .unwrap();
+
+        let wrong_order = build_test_v0_message(&[user_key, payer_key]);
+        assert!(sign_solana_versioned_message_with_secrets(
+            &payer_pk,
+            "pk",
+            &user_pk,
+            "pk",
+            &wrong_order,
+        ).is_err());
+
+        let extra_signer = build_test_v0_message(&[payer_key, user_key, [3u8; 32]]);
+        assert!(sign_solana_versioned_message_with_secrets(
+            &payer_pk,
+            "pk",
+            &user_pk,
+            "pk",
+            &extra_signer,
+        ).is_err());
+
+        assert!(sign_solana_versioned_message_with_secrets(
+            &payer_pk,
+            "pk",
+            &user_pk,
+            "pk",
+            b"SOLANA_V0_MESSAGE_TEST_BYTES_ABC123",
+        ).is_err());
+
+        let mut unsupported_program_message = build_test_v0_message(&[user_key]);
+        let program_key_offset = 5 + 32;
+        unsupported_program_message[program_key_offset..program_key_offset + 32]
+            .copy_from_slice(&[9u8; 32]);
+        assert!(validate_versioned_message_signers(
+            &unsupported_program_message,
+            &user_key,
+            &user_key,
+        ).is_err());
     }
 }

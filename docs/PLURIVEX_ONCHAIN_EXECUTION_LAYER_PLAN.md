@@ -16,6 +16,8 @@ $$\text{INTENT} \longrightarrow \text{SIMULATE} \longrightarrow \text{PROTECT} \
 
 To guarantee 100% technical honesty and prevent overclaiming in public releases, this matrix maps all **25 chapters** of the Whitepaper to the actual codebase, clearly demarcating what is **LIVE & VERIFIED**, what is **IN DEVELOPMENT**, and what requires **IMMEDIATE RECONCILIATION**.
 
+**Token-design status:** No official token ticker, network, contract address, or launch is currently designated. Token-economics references in the whitepaper are exploratory only and do not announce or endorse a live token.
+
 ---
 
 ## 🎯 Feature Alignment Matrix & Status
@@ -35,7 +37,7 @@ To guarantee 100% technical honesty and prevent overclaiming in public releases,
 | **Ch. 15** | Policies &amp; Automation | Programmable execution guardrails &amp; automated rebalancing | ✅ Static LIVE / ⏳ Automated loop Roadmap | **P2** (Automation Engine) |
 | **Ch. 16** | Competitive Landscape &amp; Differentiation | Market positioning analysis &amp; systemic integration | ✅ Theoretical Strategy | **P0** (Editorial) |
 | **Ch. 17** | Product Development Status | Table aligns: Extractor LIVE, Phrasser IN DEV, Recovery LIVE | ✅ Reconciled in Table | **P0** (Aligned) |
-| **Ch. 18–20**| $PLUR Economics &amp; Core Stewardship | Closed economic loop, technical utility &amp; deterministic engineering | ⏳ Roadmap Phase IV (Post-smart contract) | **P3** (Token Design) |
+| **Ch. 18–20**| Protocol Economics &amp; Core Stewardship (Token Design TBD) | Exploratory economics, prospective utility &amp; deterministic engineering | ⏳ Roadmap Phase IV (Post-smart contract) | **P3** (Token Design) |
 | **Ch. 21** | Strategic Roadmap (Phases I–IV) | 4-Phase strategic progression track | ✅ Aligned with `SMART_CONTRACT_PLAN.md` | **P0** (Roadmap) |
 | **Ch. 22–25**| Principles, Risks, AI Era &amp; Conclusion | Security assurances, AI agent thesis, concluding synthesis &amp; appendices | ✅ Aligned with security memorandum | **P0** (Living Document) |
 
@@ -65,9 +67,9 @@ To guarantee 100% technical honesty and prevent overclaiming in public releases,
 5. **Add Bitcoin to Chapter 10 (Multi-Chain)**:
    - Status: ✅ **Reconciled & Implemented in Web Specification**.
    - Explicitly integrated Bitcoin Tri-Address derivation (Native SegWit Bech32 `bc1q...`, Legacy BIP-44, WIF) alongside EVM and Solana SLIP-0010.
-6. **Delineate Client Desktop Phase vs Protocol Expansion & $PLUR**:
+6. **Delineate Client Desktop Phase vs Protocol Expansion & Future Token Design (TBD)**:
    - Status: ✅ **Reconciled & Implemented in Web Specification (Chapters 5 & 24–26)**.
-   - Grounded current operations in the sovereign, zero-cloud desktop application, positioning $PLUR technical utility and core engineering stewardship as the Phase V protocol expansion.
+   - Grounded current operations in the sovereign, zero-cloud desktop application. Future token utility and core engineering stewardship remain protocol-expansion concepts; no official ticker, contract, or network is designated.
 
 ---
 
@@ -92,13 +94,13 @@ To guarantee 100% technical honesty and prevent overclaiming in public releases,
 
 ---
 
-### Phase P3 — Protocol Layer, SDK & $PLUR Economics
+### Phase P3 — Protocol Layer, SDK & Future Token Design (TBD)
 1. **TypeScript Client SDK (`@plurivex/sdk`)**:
    - Expose Plurivex execution orchestration primitives for third-party bots, trading terminals, and portfolio managers.
 2. **Smart Contract Deployment (`PlurivexSweeper.sol`)**:
    - Audit and deploy deterministic `CREATE2` sweeper contracts across EVM mainnets per `docs/SMART_CONTRACT_PLAN.md`.
-3. **$PLUR Tokenomics & Fee Sharing Protocol**:
-   - Implement 1% developer success fee routing and protocol revenue distribution architecture.
+3. **Future Token Utility & Fee-Sharing Design (TBD)**:
+   - Define any token utility or revenue model only after the token identity, deployment network, legal review, and contract design are explicitly approved. No ticker or contract is currently designated.
 
 ---
 

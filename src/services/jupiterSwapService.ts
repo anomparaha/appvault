@@ -1,19 +1,76 @@
 import {
-  Connection,
+  AddressLookupTableAccount,
   PublicKey,
+  SystemProgram,
   TransactionInstruction,
   TransactionMessage,
-  AddressLookupTableAccount,
 } from "@solana/web3.js";
 import { invoke } from "@tauri-apps/api/core";
 import { Buffer } from "buffer";
 
 export const SOL_MINT = "So11111111111111111111111111111111111111112";
+export const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
+  "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+);
+export const DEFAULT_TOKEN_PROGRAM_ID = new PublicKey(
+  "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+);
+export const TOKEN_2022_PROGRAM_ID = new PublicKey(
+  "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+);
+export const JUPITER_V6_PROGRAM_ID = new PublicKey(
+  "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4",
+);
 
-const JUPITER_API_ENDPOINTS = [
-  "https://public.jupiterapi.com",
-  "https://api.jup.ag/swap/v1",
-];
+export interface SolanaMintInfo {
+  decimals: number;
+  tokenProgramId: string;
+}
+
+const mintInfoCache = new Map<string, SolanaMintInfo>();
+
+export function findAssociatedTokenAddress(
+  walletAddress: PublicKey,
+  tokenMintAddress: PublicKey,
+  tokenProgramId: PublicKey = DEFAULT_TOKEN_PROGRAM_ID,
+): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [walletAddress.toBuffer(), tokenProgramId.toBuffer(), tokenMintAddress.toBuffer()],
+    ASSOCIATED_TOKEN_PROGRAM_ID,
+  )[0];
+}
+
+function requireSessionToken(sessionToken: string): void {
+  if (!sessionToken?.trim()) {
+    throw new Error("Unlock the vault before requesting Solana DEX or mint data.");
+  }
+}
+
+export async function getSolanaMintInfo(
+  sessionToken: string,
+  mint: string,
+): Promise<SolanaMintInfo> {
+  requireSessionToken(sessionToken);
+  const normalizedMint = mint.trim();
+  // Validate before using a cache key or passing the address to the native RPC command.
+  new PublicKey(normalizedMint);
+  const cached = mintInfoCache.get(normalizedMint);
+  if (cached) return cached;
+
+  const info = await invoke<SolanaMintInfo>("get_solana_mint_info", {
+    sessionToken,
+    mint: normalizedMint,
+  });
+  if (
+    !Number.isInteger(info?.decimals) || info.decimals < 0 || info.decimals > 255 ||
+    (info.tokenProgramId !== DEFAULT_TOKEN_PROGRAM_ID.toBase58() &&
+      info.tokenProgramId !== TOKEN_2022_PROGRAM_ID.toBase58())
+  ) {
+    throw new Error("Solana RPC returned unsupported SPL mint metadata.");
+  }
+  mintInfoCache.set(normalizedMint, info);
+  return info;
+}
 
 export interface JupiterQuoteResponse {
   inputMint: string;
@@ -23,60 +80,65 @@ export interface JupiterQuoteResponse {
   otherAmountThreshold: string;
   swapMode: string;
   slippageBps: number;
-  platformFee: any;
+  platformFee: unknown;
   priceImpactPct: string;
-  routePlan: any[];
+  routePlan: unknown[];
   contextSlot?: number;
   timeTaken?: number;
   error?: string;
 }
 
 export async function fetchJupiterQuote(
+  sessionToken: string,
   inputMint: string,
   outputMint: string,
   amountRaw: string,
   slippageBps: number = 250,
 ): Promise<JupiterQuoteResponse> {
-  // 1. Try native Rust command first (immune to webview CORS & CSP blocks)
-  try {
-    const raw = await invoke<string>("jupiter_get_quote", {
-      inputMint,
-      outputMint,
-      amountRaw,
-      slippageBps,
-    });
-    const data: JupiterQuoteResponse = JSON.parse(raw);
-    if (!data.error) {
-      return data;
-    }
-  } catch (_nativeErr) {
-    // Fall back to web fetch
+  requireSessionToken(sessionToken);
+  const normalizedInputMint = new PublicKey(inputMint).toBase58();
+  const normalizedOutputMint = new PublicKey(outputMint).toBase58();
+  const maxTokenAmount = 18_446_744_073_709_551_615n;
+  if (!/^\d{1,20}$/.test(amountRaw) || BigInt(amountRaw) <= 0n || BigInt(amountRaw) > maxTokenAmount) {
+    throw new Error("Swap amount must be a positive u64 integer in base units.");
+  }
+  if (!Number.isInteger(slippageBps) || slippageBps < 0 || slippageBps > 10_000) {
+    throw new Error("Slippage must be between 0 and 10000 basis points.");
   }
 
-  // 2. Web fetch fallback
-  let lastErr = "Failed to fetch quote from Jupiter API";
-
-  for (const base of JUPITER_API_ENDPOINTS) {
-    try {
-      const url = `${base}/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amountRaw}&slippageBps=${slippageBps}`;
-      const res = await fetch(url);
-      if (!res.ok) {
-        const text = await res.text();
-        lastErr = `Jupiter quote error (${res.status}): ${text}`;
-        continue;
-      }
-      const data: JupiterQuoteResponse = await res.json();
-      if (data.error) {
-        lastErr = data.error;
-        continue;
-      }
-      return data;
-    } catch (err) {
-      lastErr = String(err);
-    }
+  // Network access stays in the native command so its vault-session and Safe Mode
+  // checks cannot be bypassed by a webview fetch fallback.
+  const raw = await invoke<string>("jupiter_get_quote", {
+    sessionToken,
+    inputMint: normalizedInputMint,
+    outputMint: normalizedOutputMint,
+    amountRaw,
+    slippageBps,
+  });
+  if (typeof raw !== "string" || raw.length > 250_000) {
+    throw new Error("Jupiter quote response is invalid or too large.");
   }
-
-  throw new Error(lastErr);
+  const data = JSON.parse(raw) as JupiterQuoteResponse;
+  if (typeof data?.error === "string" && data.error) throw new Error(data.error);
+  const validPositiveAmount = (value: unknown): value is string => {
+    if (typeof value !== "string" || !/^\d{1,20}$/.test(value)) return false;
+    const amount = BigInt(value);
+    return amount > 0n && amount <= maxTokenAmount;
+  };
+  if (
+    typeof data?.inputMint !== "string" || typeof data.outputMint !== "string" ||
+    new PublicKey(data.inputMint).toBase58() !== normalizedInputMint ||
+    new PublicKey(data.outputMint).toBase58() !== normalizedOutputMint ||
+    data.inAmount !== amountRaw || data.slippageBps !== slippageBps ||
+    data.swapMode !== "ExactIn" ||
+    !validPositiveAmount(data.outAmount) ||
+    !validPositiveAmount(data.otherAmountThreshold) ||
+    BigInt(data.otherAmountThreshold) > BigInt(data.outAmount) ||
+    !Array.isArray(data.routePlan) || data.routePlan.length === 0 || data.routePlan.length > 64
+  ) {
+    throw new Error("Jupiter returned an invalid, mismatched, or empty ExactIn quote.");
+  }
+  return data;
 }
 
 interface RawInstruction {
@@ -93,145 +155,275 @@ interface SwapInstructionsResponse {
   tokenLedgerInstruction?: RawInstruction | null;
   computeBudgetInstructions?: RawInstruction[];
   setupInstructions?: RawInstruction[];
+  otherInstructions?: RawInstruction[];
   swapInstruction: RawInstruction;
   cleanupInstruction?: RawInstruction | null;
   addressLookupTableAddresses?: string[];
   error?: string;
 }
 
+function decodeInstructionData(value: string): Buffer {
+  if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
+    throw new Error("Jupiter returned invalid base64 instruction data.");
+  }
+  return Buffer.from(value, "base64");
+}
+
 function deserializeInstruction(ix: RawInstruction): TransactionInstruction {
+  if (
+    !ix?.programId || !Array.isArray(ix.accounts) || ix.accounts.length > 256 ||
+    typeof ix.data !== "string" || ix.data.length > 16_384 ||
+    ix.accounts.some((account) =>
+      !account || typeof account.pubkey !== "string" ||
+      typeof account.isSigner !== "boolean" || typeof account.isWritable !== "boolean"
+    )
+  ) {
+    throw new Error("Jupiter returned a malformed instruction.");
+  }
   return new TransactionInstruction({
     programId: new PublicKey(ix.programId),
-    keys: ix.accounts.map((a) => ({
-      pubkey: new PublicKey(a.pubkey),
-      isSigner: a.isSigner,
-      isWritable: a.isWritable,
+    keys: ix.accounts.map((account) => ({
+      pubkey: new PublicKey(account.pubkey),
+      isSigner: account.isSigner,
+      isWritable: account.isWritable,
     })),
-    data: Buffer.from(ix.data, "base64"),
+    data: decodeInstructionData(ix.data),
   });
 }
 
+async function fetchSwapInstructions(
+  sessionToken: string,
+  payloadJson: string,
+): Promise<SwapInstructionsResponse> {
+  requireSessionToken(sessionToken);
+  const raw = await invoke<string>("jupiter_get_swap_instructions", {
+    sessionToken,
+    payloadJson,
+  });
+  const data = JSON.parse(raw) as SwapInstructionsResponse;
+  if (data.error) throw new Error(data.error);
+  if (!data.swapInstruction) throw new Error("Jupiter returned no swap instruction.");
+  return data;
+}
+
+function validateJupiterSwapInstruction(data: SwapInstructionsResponse, expectedWritableAccount?: string): void {
+  const swap = deserializeInstruction(data.swapInstruction);
+  if (!swap.programId.equals(JUPITER_V6_PROGRAM_ID)) {
+    throw new Error("Jupiter returned an unexpected top-level swap program.");
+  }
+  if (expectedWritableAccount) {
+    const expected = new PublicKey(expectedWritableAccount);
+    if (!swap.keys.some((account) => account.pubkey.equals(expected) && account.isWritable)) {
+      throw new Error("Jupiter swap does not write to the selected recipient's token account.");
+    }
+  }
+}
+
+function orderedInstructions(data: SwapInstructionsResponse): TransactionInstruction[] {
+  return [
+    ...(data.computeBudgetInstructions || []).map(deserializeInstruction),
+    ...(data.setupInstructions || []).map(deserializeInstruction),
+    ...(data.tokenLedgerInstruction ? [deserializeInstruction(data.tokenLedgerInstruction)] : []),
+    ...(data.otherInstructions || []).map(deserializeInstruction),
+    deserializeInstruction(data.swapInstruction),
+    ...(data.cleanupInstruction ? [deserializeInstruction(data.cleanupInstruction)] : []),
+  ];
+}
+
+async function fetchAddressLookupTables(
+  sessionToken: string,
+  addresses: string[],
+): Promise<AddressLookupTableAccount[]> {
+  requireSessionToken(sessionToken);
+  if (addresses.length > 32) throw new Error("Jupiter returned too many address lookup tables.");
+  return Promise.all(addresses.map(async (address) => {
+    const key = new PublicKey(address);
+    const encoded = await invoke<string>("get_solana_address_lookup_table", {
+      sessionToken,
+      address: key.toBase58(),
+    });
+    const accountData = Buffer.from(encoded, "base64");
+    const state = AddressLookupTableAccount.deserialize(accountData);
+    return new AddressLookupTableAccount({ key, state });
+  }));
+}
+
+async function compileVersionedMessage(
+  sessionToken: string,
+  feePayerAddress: string,
+  instructions: TransactionInstruction[],
+  lookupTableAddresses: string[] = [],
+): Promise<string> {
+  requireSessionToken(sessionToken);
+  const lookupTables = await fetchAddressLookupTables(sessionToken, lookupTableAddresses);
+  const recentBlockhash = await invoke<string>("get_solana_recent_blockhash", { sessionToken });
+  const message = new TransactionMessage({
+    payerKey: new PublicKey(feePayerAddress),
+    recentBlockhash,
+    instructions,
+  }).compileToV0Message(lookupTables);
+  return Buffer.from(message.serialize()).toString("base64");
+}
+
+function validateAndRedirectWsolClose(
+  cleanup: RawInstruction | null | undefined,
+  subWalletAddress: string,
+  feePayerAddress: string,
+  recipientAddress: string,
+): void {
+  if (!cleanup) {
+    throw new Error("Jupiter did not return a WSOL close instruction; refusing an unverified sell redirect.");
+  }
+  const subWallet = new PublicKey(subWalletAddress).toBase58();
+  const feePayer = new PublicKey(feePayerAddress).toBase58();
+  const recipient = new PublicKey(recipientAddress).toBase58();
+  if (!Array.isArray(cleanup.accounts) || cleanup.accounts.length < 3) {
+    throw new Error("Jupiter cleanup instruction has an invalid account list.");
+  }
+  const cleanupData = decodeInstructionData(cleanup.data);
+  const expectedWsolAta = findAssociatedTokenAddress(
+    new PublicKey(subWallet),
+    new PublicKey(SOL_MINT),
+    DEFAULT_TOKEN_PROGRAM_ID,
+  ).toBase58();
+  if (
+    cleanup.programId !== DEFAULT_TOKEN_PROGRAM_ID.toBase58() ||
+    cleanupData.length !== 1 || cleanupData[0] !== 9 ||
+    cleanup.accounts[0]?.pubkey !== expectedWsolAta ||
+    cleanup.accounts[2]?.pubkey !== subWallet ||
+    cleanup.accounts[0]?.isWritable !== true ||
+    cleanup.accounts[1]?.isWritable !== true ||
+    cleanup.accounts[2]?.isSigner !== true ||
+    (cleanup.accounts[1]?.pubkey !== subWallet && cleanup.accounts[1]?.pubkey !== feePayer)
+  ) {
+    throw new Error("Jupiter cleanup instruction is not the expected wrapped-SOL close for this wallet.");
+  }
+  cleanup.accounts[1].pubkey = recipient;
+}
+
 /**
- * Builds a Stealth DEX Sell Versioned Message:
- * 1. userPublicKey is the sub-wallet (owns the token, signs swap authorization).
- * 2. payer is the fee payer wallet (sponsors gas and signature fees).
- * 3. CRITICAL STEALTH REDIRECT: cleanupInstruction.accounts[1] (native SOL destination)
- *    is modified to point to masterRecipientAddress!
- * 4. Sub-wallet never touches or holds the incoming SOL!
+ * Build a Jupiter sell message and redirect only a verified wrapped-SOL
+ * CloseAccount destination to the explicitly selected recipient wallet.
  */
 export async function buildStealthDexSellMessage(
+  sessionToken: string,
   quote: JupiterQuoteResponse,
   subWalletAddress: string,
   feePayerAddress: string,
   masterRecipientAddress: string,
-  rpcUrl: string = "https://mainnet.helius-rpc.com/?api-key=f0adee34-1df4-45c6-b897-b93f4cad01c9",
 ): Promise<{ messageBase64: string; estimatedSolOut: string; rawOutLamports: string }> {
-  let instructionsData: SwapInstructionsResponse | null = null;
-  let lastErr = "Failed to fetch swap-instructions";
-
+  if (
+    quote.outputMint !== SOL_MINT || !/^\d+$/.test(quote.inAmount) || !/^\d+$/.test(quote.outAmount) ||
+    BigInt(quote.inAmount) <= 0n || BigInt(quote.outAmount) <= 0n
+  ) {
+    throw new Error("Sell quote must contain positive amounts and output wrapped SOL.");
+  }
+  new PublicKey(quote.inputMint);
+  const subWallet = new PublicKey(subWalletAddress).toBase58();
+  const feePayer = new PublicKey(feePayerAddress).toBase58();
+  const recipient = new PublicKey(masterRecipientAddress).toBase58();
   const cleanedQuote = { ...quote };
-  delete (cleanedQuote as any).platformFee;
-
-  const swapPayload = JSON.stringify({
+  delete (cleanedQuote as Partial<JupiterQuoteResponse>).platformFee;
+  const data = await fetchSwapInstructions(sessionToken, JSON.stringify({
     quoteResponse: cleanedQuote,
-    userPublicKey: subWalletAddress,
-    payer: feePayerAddress,
+    userPublicKey: subWallet,
+    payer: feePayer,
     wrapAndUnwrapSol: true,
-  });
+  }));
 
-  // 1. Try native Rust command first (immune to webview CORS / CSP blocks)
-  try {
-    const raw = await invoke<string>("jupiter_get_swap_instructions", {
-      payloadJson: swapPayload,
-    });
-    const parsed: SwapInstructionsResponse = JSON.parse(raw);
-    if (!parsed.error) {
-      instructionsData = parsed;
-    }
-  } catch (_nativeErr) {
-    // Fall back to web fetch
-  }
-
-  // 2. Web fetch fallback
-  if (!instructionsData) {
-    for (const base of JUPITER_API_ENDPOINTS) {
-      try {
-        const res = await fetch(`${base}/swap-instructions`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: swapPayload,
-        });
-
-        if (!res.ok) {
-          lastErr = `Jupiter swap-instructions error (${res.status}): ${await res.text()}`;
-          continue;
-        }
-
-        const data: SwapInstructionsResponse = await res.json();
-        if (data.error) {
-          lastErr = data.error;
-          continue;
-        }
-
-        instructionsData = data;
-        break;
-      } catch (err) {
-        lastErr = String(err);
-      }
-    }
-  }
-
-  if (!instructionsData) {
-    throw new Error(lastErr);
-  }
-
-  // Stealth Redirect: Redirect SOL output directly into the Master Recipient Vault!
-  if (instructionsData.cleanupInstruction && instructionsData.cleanupInstruction.accounts.length >= 2) {
-    instructionsData.cleanupInstruction.accounts[1].pubkey = masterRecipientAddress.trim();
-  }
-
-  const allIxs: TransactionInstruction[] = [
-    ...(instructionsData.computeBudgetInstructions || []).map(deserializeInstruction),
-    ...(instructionsData.setupInstructions || []).map(deserializeInstruction),
-    deserializeInstruction(instructionsData.swapInstruction),
-    ...(instructionsData.cleanupInstruction ? [deserializeInstruction(instructionsData.cleanupInstruction)] : []),
-  ];
-
-  const connection = new Connection(rpcUrl, "confirmed");
-
-  // Fetch address lookup table accounts
-  const altAddresses = instructionsData.addressLookupTableAddresses || [];
-  const altAccounts = await Promise.all(
-    altAddresses.map(async (addr) => {
-      try {
-        const res = await connection.getAddressLookupTable(new PublicKey(addr));
-        return res.value;
-      } catch {
-        return null;
-      }
-    }),
+  validateAndRedirectWsolClose(data.cleanupInstruction, subWallet, feePayer, recipient);
+  validateJupiterSwapInstruction(data);
+  const instructions = orderedInstructions(data);
+  const messageBase64 = await compileVersionedMessage(
+    sessionToken,
+    feePayer,
+    instructions,
+    data.addressLookupTableAddresses || [],
   );
-
-  let blockhash: string;
-  try {
-    blockhash = (await connection.getLatestBlockhash("confirmed")).blockhash;
-  } catch (_bhErr) {
-    blockhash = await invoke<string>("get_solana_recent_blockhash");
-  }
-
-  const msgV0 = new TransactionMessage({
-    payerKey: new PublicKey(feePayerAddress),
-    recentBlockhash: blockhash,
-    instructions: allIxs,
-  }).compileToV0Message(altAccounts.filter((x): x is AddressLookupTableAccount => x !== null));
-
-  const serialized = msgV0.serialize();
-  const messageBase64 = Buffer.from(serialized).toString("base64");
-  const estimatedSolOut = (Number(quote.outAmount) / 1e9).toFixed(6);
 
   return {
     messageBase64,
-    estimatedSolOut,
+    estimatedSolOut: (Number(quote.outAmount) / 1e9).toFixed(6),
     rawOutLamports: quote.outAmount,
+  };
+}
+
+/**
+ * Build a Jupiter buy message. If a destination owner is supplied, the token
+ * destination must be that owner's correctly-derived ATA for the mint's actual
+ * SPL/Token-2022 program; arbitrary token-account addresses are rejected.
+ */
+export async function buildDexBuyMessage(
+  sessionToken: string,
+  quote: JupiterQuoteResponse,
+  buyerWalletAddress: string,
+  feePayerAddress: string,
+  destinationAta?: string,
+  destinationOwner?: string,
+  tokenProgramId?: string,
+): Promise<{ messageBase64: string; estimatedTokensOut: string; rawOutTokens: string }> {
+  if (
+    quote.inputMint !== SOL_MINT || !/^\d+$/.test(quote.inAmount) || !/^\d+$/.test(quote.outAmount) ||
+    BigInt(quote.inAmount) <= 0n || BigInt(quote.outAmount) <= 0n
+  ) {
+    throw new Error("Buy quote must contain positive amounts and spend wrapped SOL.");
+  }
+  const buyer = new PublicKey(buyerWalletAddress).toBase58();
+  const feePayer = new PublicKey(feePayerAddress).toBase58();
+  const mint = new PublicKey(quote.outputMint);
+  const hasDestination = Boolean(destinationAta || destinationOwner);
+  if (hasDestination && (!destinationAta || !destinationOwner || !tokenProgramId)) {
+    throw new Error("A destination owner, derived ATA, and mint token-program id are required together.");
+  }
+
+  let ataInstruction: TransactionInstruction | undefined;
+  if (hasDestination) {
+    const tokenProgram = new PublicKey(tokenProgramId!);
+    if (!tokenProgram.equals(DEFAULT_TOKEN_PROGRAM_ID) && !tokenProgram.equals(TOKEN_2022_PROGRAM_ID)) {
+      throw new Error("Unsupported token program id for the destination ATA.");
+    }
+    const owner = new PublicKey(destinationOwner!);
+    const expectedAta = findAssociatedTokenAddress(owner, mint, tokenProgram).toBase58();
+    if (new PublicKey(destinationAta!).toBase58() !== expectedAta) {
+      throw new Error("Destination account is not the associated token account for the selected owner and mint.");
+    }
+    ataInstruction = new TransactionInstruction({
+      keys: [
+        { pubkey: new PublicKey(feePayer), isSigner: true, isWritable: true },
+        { pubkey: new PublicKey(expectedAta), isSigner: false, isWritable: true },
+        { pubkey: owner, isSigner: false, isWritable: false },
+        { pubkey: mint, isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: tokenProgram, isSigner: false, isWritable: false },
+      ],
+      programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+      data: Buffer.from([1]), // Associated Token Account CreateIdempotent
+    });
+  }
+
+  const cleanedQuote = { ...quote };
+  delete (cleanedQuote as Partial<JupiterQuoteResponse>).platformFee;
+  const swapPayload: Record<string, unknown> = {
+    quoteResponse: cleanedQuote,
+    userPublicKey: buyer,
+    payer: feePayer,
+    wrapAndUnwrapSol: true,
+  };
+  if (destinationAta) swapPayload.destinationTokenAccount = destinationAta;
+  const data = await fetchSwapInstructions(sessionToken, JSON.stringify(swapPayload));
+  validateJupiterSwapInstruction(data, destinationAta);
+  const instructions = orderedInstructions(data);
+  if (ataInstruction) instructions.unshift(ataInstruction);
+
+  const messageBase64 = await compileVersionedMessage(
+    sessionToken,
+    feePayer,
+    instructions,
+    data.addressLookupTableAddresses || [],
+  );
+  return {
+    messageBase64,
+    estimatedTokensOut: quote.outAmount,
+    rawOutTokens: quote.outAmount,
   };
 }

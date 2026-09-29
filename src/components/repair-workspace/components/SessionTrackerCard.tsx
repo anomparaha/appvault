@@ -232,10 +232,10 @@ export const SessionTrackerCard: React.FC<SessionTrackerCardProps> = ({
             </span>
             <span className="session-metric-sub">
               {activeSession?.status === "completed"
-                ? "100% In-Memory Done"
+                ? "Search complete"
                 : activeSession?.status === "paused"
-                ? "Paused in RAM"
-                : "Zero-Disk RAM Shield"}
+                ? "Session paused"
+                : "Process-memory session"}
             </span>
           </div>
         </div>

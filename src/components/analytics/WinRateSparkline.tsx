@@ -1,12 +1,11 @@
 import { useState, useEffect, useMemo } from "react";
-import { getActivities, subscribeActivities, type ActivityRecord } from "../../lib/activity";
-import { calculateWinRateTrend, type WinRateTrendPoint } from "../../lib/winrateAnalytics";
+import { calculateWinRateTrend, type WinRateTrendPoint } from "../../lib/services/winrateAnalytics";
 import {
   getTradePositions,
   subscribeTradePositions,
   type TokenTradePosition,
 } from "../../services/tokenTradeHistoryService";
-import type { WalletView } from "../../lib/types";
+import type { WalletView } from "../../lib/types/index";
 
 interface WinRateSparklineProps {
   activeWallets?: WalletView[];
@@ -24,25 +23,18 @@ export function WinRateSparkline({
   onViewActivity,
 }: WinRateSparklineProps) {
   const [positions, setPositions] = useState<TokenTradePosition[]>(() => getTradePositions());
-  const [activities, setActivities] = useState<ActivityRecord[]>(() => getActivities());
   const [hoveredPoint, setHoveredPoint] = useState<WinRateTrendPoint | null>(null);
 
   useEffect(() => {
     const unsubPositions = subscribeTradePositions((latest) => {
       setPositions(latest);
     });
-    const unsubActivities = subscribeActivities((latest) => {
-      setActivities(latest);
-    });
-    return () => {
-      unsubPositions();
-      unsubActivities();
-    };
+    return unsubPositions;
   }, []);
 
   const trend = useMemo(() => {
-    return calculateWinRateTrend(positions, activities, activeWallets, 320, 90);
-  }, [positions, activities, activeWallets]);
+    return calculateWinRateTrend(positions, activeWallets, 320, 90);
+  }, [positions, activeWallets]);
 
   return (
     <div
@@ -294,7 +286,7 @@ export function WinRateSparkline({
         </div>
         <div>
           <span>WALLETS</span>
-          <b>{activeWallets && activeWallets.length > 0 ? activeWallets.length : allWallets.length} Active</b>
+          <b>{(activeWallets ?? allWallets).length} Active</b>
         </div>
       </div>
     </div>

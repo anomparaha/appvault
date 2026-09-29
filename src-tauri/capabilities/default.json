@@ -12,6 +12,7 @@
     "fs:allow-write-text-file",
     "allow-scan-balances",
     "allow-fee-estimate",
+    "allow-chain-history",
     "allow-tx-broadcast",
     "allow-native-signing",
     "allow-directory-scan",
@@ -20,8 +21,10 @@
     "allow-vault-crypto",
     "allow-vault-derivation",
     "allow-air-gapped-controls",
+    "allow-robinhood-ws-config",
     "allow-recovery-session",
     "allow-price-feed",
+    "allow-jupiter-dex",
     "allow-updater-scoped",
     "process:allow-restart"
   ]

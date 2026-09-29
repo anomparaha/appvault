@@ -1,179 +1,390 @@
 /**
- * Dedicated Real-Time WebSocket Service for Robinhood Chain (Zan.top Dedicated Node).
- * Subscribes to newHeads and allows reactive on-chain balance updates without polling.
+ * ZAN WSS client for Robinhood Chain.
+ *
+ * The API key is encrypted in the native vault database and is only requested
+ * after the unlocked-session + Online Mode gate has passed. `newHeads` is the
+ * real-time trigger; balances are refreshed through the existing native scanner
+ * so results continue to be validated and persisted by the Rust layer.
  */
 
-type BlockCallback = (blockNumber: number, blockHash: string) => void;
-type StatusCallback = (connected: boolean) => void;
+import { invoke } from "@tauri-apps/api/core";
+import { verifyOnlineNetworkAccess } from "../lib/services/networkAccess";
+
+export interface RobinhoodBlock {
+  number: number;
+  hash: string;
+  numberHex: string;
+}
+
+export type RobinhoodWsStatus =
+  | "disabled"
+  | "connecting"
+  | "subscribing"
+  | "connected"
+  | "disconnected"
+  | "unconfigured"
+  | "error";
+
+type BlockCallback = (block: RobinhoodBlock) => void;
+type StatusCallback = (status: RobinhoodWsStatus) => void;
+
+const CHAIN_ID_REQUEST_ID = 1;
+const SUBSCRIPTION_REQUEST_ID = 2;
+const ROBINHOOD_CHAIN_ID = "0x1237";
+const ROBINHOOD_WS_ENDPOINT_PREFIX = "wss://api.zan.top/node/ws/v1/robinhood/mainnet/";
+const HEARTBEAT_INTERVAL_MS = 25_000;
 
 class RobinhoodWsClient {
-  private wsUrl: string = "wss://api.zan.top/node/ws/v1/robinhood/mainnet/9f2590af4fda43418ca4f0e8ded27af5";
   private socket: WebSocket | null = null;
-  private isConnecting: boolean = false;
-  private isConnected: boolean = false;
-  private blockListeners: Set<BlockCallback> = new Set();
-  private statusListeners: Set<StatusCallback> = new Set();
+  private isEnabled = false;
+  private isConnecting = false;
+  private sessionToken: string | null = null;
   private reconnectTimer: number | null = null;
+  private heartbeatTimer: number | null = null;
+  private reconnectAttempts = 0;
+  private generation = 0;
+  private nextRequestId = 10;
   private subscriptionId: string | null = null;
-  private lastBlockNumber: number = 0;
+  private latestBlock: RobinhoodBlock | null = null;
+  private status: RobinhoodWsStatus = "disabled";
+  private messageProcessing: Promise<void> = Promise.resolve();
+  private blockListeners = new Set<BlockCallback>();
+  private statusListeners = new Set<StatusCallback>();
 
-  constructor() {
-    // Lazily initialized when subscribers attach
+  public setEnabled(enabled: boolean, sessionToken?: string | null): void {
+    const nextToken = enabled ? sessionToken?.trim() || null : null;
+    if (!nextToken) {
+      this.isEnabled = false;
+      this.sessionToken = null;
+      this.generation += 1;
+      this.disconnect();
+      this.setStatus("disabled");
+      return;
+    }
+
+    const sessionChanged = this.sessionToken !== nextToken;
+    this.sessionToken = nextToken;
+    this.isEnabled = true;
+    if (sessionChanged) {
+      this.generation += 1;
+      this.disconnect();
+    }
+    if (!this.socket && !this.isConnecting) this.connect();
   }
 
-  public connect(): void {
-    if (typeof window === "undefined" || this.socket || this.isConnecting) return;
+  /** Re-read the vault-encrypted ZAN key after it is saved or removed. */
+  public reconnectNow(): void {
+    if (!this.isEnabled || !this.sessionToken) return;
+    this.generation += 1;
+    this.disconnect();
+    this.connect();
+  }
+
+  public subscribeBlocks(callback: BlockCallback): () => void {
+    this.blockListeners.add(callback);
+    return () => this.blockListeners.delete(callback);
+  }
+
+  public subscribeStatus(callback: StatusCallback): () => void {
+    this.statusListeners.add(callback);
+    callback(this.status);
+    return () => this.statusListeners.delete(callback);
+  }
+
+  public getStatus(): RobinhoodWsStatus {
+    return this.status;
+  }
+
+  public getLatestBlock(): RobinhoodBlock | null {
+    return this.latestBlock;
+  }
+
+  private connect(): void {
+    const sessionToken = this.sessionToken;
+    const generation = this.generation;
+    if (
+      !this.isEnabled || !sessionToken || this.socket || this.isConnecting ||
+      typeof window === "undefined" || typeof WebSocket === "undefined"
+    ) return;
+
     this.isConnecting = true;
+    this.setStatus("connecting");
+    void this.openAfterNativeGate(sessionToken, generation);
+  }
+
+  private async openAfterNativeGate(sessionToken: string, generation: number): Promise<void> {
+    try {
+      await verifyOnlineNetworkAccess(sessionToken);
+    } catch {
+      this.failClosed(sessionToken, generation);
+      return;
+    }
+    if (!this.isCurrentSession(sessionToken, generation)) return;
+
+    let endpoint: string | null;
+    try {
+      endpoint = await invoke<string | null>("get_robinhood_wss_endpoint_scoped", {
+        sessionToken,
+      });
+    } catch {
+      if (!this.isCurrentSession(sessionToken, generation)) return;
+      this.isConnecting = false;
+      this.setStatus("error");
+      this.scheduleReconnect();
+      return;
+    }
+    if (!this.isCurrentSession(sessionToken, generation)) return;
+    if (!endpoint) {
+      this.isConnecting = false;
+      this.setStatus("unconfigured");
+      return;
+    }
+
+    // The native command builds this exact provider URL from the encrypted key.
+    // Validate the origin/path without logging or displaying the credential.
+    if (!endpoint.startsWith(ROBINHOOD_WS_ENDPOINT_PREFIX)) {
+      this.isConnecting = false;
+      this.setStatus("error");
+      return;
+    }
 
     try {
-      this.socket = new WebSocket(this.wsUrl);
+      await verifyOnlineNetworkAccess(sessionToken);
+    } catch {
+      this.failClosed(sessionToken, generation);
+      return;
+    }
+    if (!this.isCurrentSession(sessionToken, generation)) return;
 
-      this.socket.onopen = () => {
-        this.isConnecting = false;
-        this.isConnected = true;
-        this.notifyStatus(true);
-
-        // Subscribe to newHeads
-        if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-          this.socket.send(
-            JSON.stringify({
-              jsonrpc: "2.0",
-              id: 1,
-              method: "eth_subscribe",
-              params: ["newHeads"],
-            })
-          );
-        }
+    try {
+      const socket = new WebSocket(endpoint);
+      this.socket = socket;
+      socket.onopen = () => void this.handleSocketOpen(socket, sessionToken, generation);
+      socket.onmessage = (event) => {
+        if (!this.isCurrentSession(sessionToken, generation, socket)) return;
+        this.messageProcessing = this.messageProcessing
+          .then(() => this.handleSocketMessage(event.data, socket, sessionToken, generation))
+          .catch(() => this.failClosed(sessionToken, generation));
       };
-
-      this.socket.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-
-          // Subscription acknowledgment
-          if (data.id === 1 && data.result) {
-            this.subscriptionId = data.result;
-            return;
-          }
-
-          // New head notification
-          if (data.method === "eth_subscription" && data.params?.result) {
-            const head = data.params.result;
-            const bNum = parseInt(head.number, 16);
-            const bHash = head.hash || "";
-
-            if (bNum && bNum !== this.lastBlockNumber) {
-              this.lastBlockNumber = bNum;
-              this.notifyBlock(bNum, bHash);
-            }
-          }
-        } catch (err) {
-          console.warn("[Robinhood WS] Message parse warning:", err);
-        }
+      socket.onerror = () => {
+        // Do not log browser error objects: WebSocket diagnostics may contain the URL.
+        if (this.isCurrentSession(sessionToken, generation, socket)) this.setStatus("error");
       };
-
-      this.socket.onerror = (err) => {
-        console.warn("[Robinhood WS] Socket error:", err);
-      };
-
-      this.socket.onclose = () => {
-        this.isConnecting = false;
-        this.isConnected = false;
-        this.socket = null;
-        this.subscriptionId = null;
-        this.notifyStatus(false);
+      socket.onclose = () => {
+        if (!this.isCurrentSession(sessionToken, generation, socket)) return;
+        this.cleanupSocketState(socket);
+        this.setStatus("disconnected");
         this.scheduleReconnect();
       };
-    } catch (err) {
+    } catch {
+      if (!this.isCurrentSession(sessionToken, generation)) return;
       this.isConnecting = false;
-      this.isConnected = false;
-      this.socket = null;
+      this.setStatus("error");
       this.scheduleReconnect();
     }
   }
 
-  private scheduleReconnect(): void {
-    if (this.reconnectTimer) return;
-    this.reconnectTimer = window.setTimeout(() => {
-      this.reconnectTimer = null;
-      if (this.blockListeners.size > 0 || this.statusListeners.size > 0) {
-        this.connect();
-      }
-    }, 4000);
-  }
-
-  public subscribeBlocks(cb: BlockCallback): () => void {
-    this.blockListeners.add(cb);
-    if (!this.isConnected && !this.isConnecting) {
-      this.connect();
+  private async handleSocketOpen(
+    socket: WebSocket,
+    sessionToken: string,
+    generation: number,
+  ): Promise<void> {
+    try {
+      await verifyOnlineNetworkAccess(sessionToken);
+    } catch {
+      this.failClosed(sessionToken, generation);
+      socket.close();
+      return;
     }
-    return () => {
-      this.blockListeners.delete(cb);
-      if (this.blockListeners.size === 0 && this.statusListeners.size === 0) {
-        this.disconnect();
-      }
-    };
-  }
-
-  public subscribeStatus(cb: StatusCallback): () => void {
-    this.statusListeners.add(cb);
-    cb(this.isConnected);
-    if (!this.isConnected && !this.isConnecting) {
-      this.connect();
+    if (!this.isCurrentSession(sessionToken, generation, socket)) {
+      socket.close();
+      return;
     }
-    return () => {
-      this.statusListeners.delete(cb);
-      if (this.blockListeners.size === 0 && this.statusListeners.size === 0) {
-        this.disconnect();
-      }
-    };
+
+    this.isConnecting = false;
+    this.setStatus("subscribing");
+    this.sendJson({
+      jsonrpc: "2.0",
+      id: CHAIN_ID_REQUEST_ID,
+      method: "eth_chainId",
+      params: [],
+    }, socket, sessionToken, generation);
+    this.startHeartbeat(socket, sessionToken, generation);
   }
 
-  private notifyBlock(blockNumber: number, blockHash: string): void {
+  private async handleSocketMessage(
+    data: MessageEvent["data"],
+    socket: WebSocket,
+    sessionToken: string,
+    generation: number,
+  ): Promise<void> {
+    try {
+      await verifyOnlineNetworkAccess(sessionToken);
+    } catch {
+      this.failClosed(sessionToken, generation);
+      return;
+    }
+    if (!this.isCurrentSession(sessionToken, generation, socket)) return;
+
+    let message: any;
+    try {
+      message = JSON.parse(typeof data === "string" ? data : String(data));
+    } catch {
+      return;
+    }
+
+    if (Number(message?.id) === CHAIN_ID_REQUEST_ID) {
+      if (typeof message.result !== "string" || message.result.toLowerCase() !== ROBINHOOD_CHAIN_ID) {
+        this.setStatus("error");
+        socket.close();
+        return;
+      }
+      this.sendJson({
+        jsonrpc: "2.0",
+        id: SUBSCRIPTION_REQUEST_ID,
+        method: "eth_subscribe",
+        params: ["newHeads"],
+      }, socket, sessionToken, generation);
+      return;
+    }
+
+    if (Number(message?.id) === SUBSCRIPTION_REQUEST_ID) {
+      if (typeof message.result === "string" && message.result.length > 0) {
+        this.subscriptionId = message.result;
+        this.reconnectAttempts = 0;
+        this.setStatus("connected");
+      } else {
+        this.setStatus("error");
+        socket.close();
+      }
+      return;
+    }
+
+    if (
+      message?.method !== "eth_subscription" ||
+      message.params?.subscription !== this.subscriptionId
+    ) return;
+
+    const header = message.params?.result;
+    const numberHex = header?.number;
+    const blockHash = header?.hash;
+    if (
+      typeof numberHex !== "string" || !/^0x[0-9a-f]+$/i.test(numberHex) ||
+      typeof blockHash !== "string" || !/^0x[0-9a-f]{64}$/i.test(blockHash)
+    ) return;
+
+    const parsedNumber = Number.parseInt(numberHex.slice(2), 16);
+    if (!Number.isSafeInteger(parsedNumber) || parsedNumber <= 0) return;
+    if (this.latestBlock?.number === parsedNumber && this.latestBlock.hash === blockHash) return;
+
+    const block = { number: parsedNumber, hash: blockHash, numberHex };
+    this.latestBlock = block;
     for (const listener of this.blockListeners) {
       try {
-        listener(blockNumber, blockHash);
-      } catch (e) {
-        console.error("[Robinhood WS] Listener error:", e);
+        listener(block);
+      } catch (error) {
+        console.error("[Robinhood WS] Block listener failed:", error);
       }
     }
   }
 
-  private notifyStatus(status: boolean): void {
+  private sendJson(
+    payload: unknown,
+    socket: WebSocket,
+    sessionToken: string,
+    generation: number,
+  ): void {
+    void verifyOnlineNetworkAccess(sessionToken).then(() => {
+      if (!this.isCurrentSession(sessionToken, generation, socket) || socket.readyState !== WebSocket.OPEN) return;
+      try {
+        socket.send(JSON.stringify(payload));
+      } catch {
+        socket.close();
+      }
+    }).catch(() => this.failClosed(sessionToken, generation));
+  }
+
+  private startHeartbeat(socket: WebSocket, sessionToken: string, generation: number): void {
+    this.stopHeartbeat();
+    this.heartbeatTimer = window.setInterval(() => {
+      if (!this.isCurrentSession(sessionToken, generation, socket)) return;
+      this.sendJson({
+        jsonrpc: "2.0",
+        id: this.nextRequestId++,
+        method: "eth_blockNumber",
+        params: [],
+      }, socket, sessionToken, generation);
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer !== null) {
+      window.clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (!this.isEnabled || !this.sessionToken || this.reconnectTimer !== null) return;
+    const delay = Math.min(1_500 * 2 ** Math.min(this.reconnectAttempts, 5), 45_000);
+    this.reconnectAttempts += 1;
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.isEnabled && this.sessionToken && !this.socket && !this.isConnecting) this.connect();
+    }, delay);
+  }
+
+  private isCurrentSession(sessionToken: string, generation: number, socket?: WebSocket): boolean {
+    return this.isEnabled && this.sessionToken === sessionToken && this.generation === generation &&
+      (!socket || this.socket === socket);
+  }
+
+  private failClosed(sessionToken: string, generation: number): void {
+    if (this.sessionToken !== sessionToken || this.generation !== generation) return;
+    this.isEnabled = false;
+    this.sessionToken = null;
+    this.generation += 1;
+    this.disconnect();
+    this.setStatus("disabled");
+  }
+
+  private cleanupSocketState(socket: WebSocket): void {
+    if (this.socket !== socket) return;
+    this.socket = null;
+    this.isConnecting = false;
+    this.subscriptionId = null;
+    this.stopHeartbeat();
+  }
+
+  private disconnect(): void {
+    if (this.reconnectTimer !== null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.stopHeartbeat();
+    const socket = this.socket;
+    this.socket = null;
+    this.isConnecting = false;
+    this.subscriptionId = null;
+    if (socket) {
+      socket.onopen = null;
+      socket.onmessage = null;
+      socket.onerror = null;
+      socket.onclose = null;
+      try { socket.close(); } catch { /* best-effort teardown */ }
+    }
+  }
+
+  private setStatus(status: RobinhoodWsStatus): void {
+    if (this.status === status) return;
+    this.status = status;
     for (const listener of this.statusListeners) {
       try {
         listener(status);
-      } catch (e) {
-        console.error("[Robinhood WS] Status listener error:", e);
+      } catch (error) {
+        console.error("[Robinhood WS] Status listener failed:", error);
       }
     }
-  }
-
-  public disconnect(): void {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    if (this.socket) {
-      this.socket.close();
-      this.socket = null;
-    }
-    this.isConnected = false;
-    this.isConnecting = false;
-    this.subscriptionId = null;
-    this.notifyStatus(false);
-  }
-
-  public getStatus(): boolean {
-    return this.isConnected;
-  }
-
-  public getLastBlock(): number {
-    return this.lastBlockNumber;
-  }
-
-  public getSubscriptionId(): string | null {
-    return this.subscriptionId;
   }
 }
 

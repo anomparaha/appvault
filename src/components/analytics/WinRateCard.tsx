@@ -1,49 +1,59 @@
 import { useState, useMemo, useEffect } from "react";
-import { getActivities, subscribeActivities, type ActivityRecord } from "../../lib/activity";
-import { calculateWinRate, type Timeframe } from "../../lib/winrateAnalytics";
-import { robinhoodWs } from "../../services/robinhoodWsService";
+import { useApp } from "../../context/AppContext";
+import { getTradePositions, subscribeTradePositions, type TokenTradePosition } from "../../services/tokenTradeHistoryService";
+import { getActivities, subscribeActivities, type ActivityRecord } from "../../lib/services/activity";
+import { calculateWinRate, type Timeframe } from "../../lib/services/winrateAnalytics";
 import { solanaWs } from "../../services/solanaWsService";
+import { robinhoodWs, type RobinhoodWsStatus } from "../../services/robinhoodWsService";
 import { IconTrendingUp } from "../../icons";
 
 export function WinRateCard({ compact = false }: { compact?: boolean }) {
+  const { wallets, selectedSweepIds, isAirGapped, networkSessionReady } = useApp();
+  const robinhoodSelected = wallets.some((wallet) => Boolean(wallet.address) && selectedSweepIds.has(wallet.id));
   const [activities, setActivities] = useState<ActivityRecord[]>(() => getActivities());
+  const [positions, setPositions] = useState<TokenTradePosition[]>(() => getTradePositions());
   const [timeframe, setTimeframe] = useState<Timeframe>("7D");
-  const [wsConnected, setWsConnected] = useState<boolean>(false);
-  const [latestBlock, setLatestBlock] = useState<number>(0);
   const [solWsConnected, setSolWsConnected] = useState<boolean>(false);
   const [latestSlot, setLatestSlot] = useState<number>(0);
+  const [robinhoodWsStatus, setRobinhoodWsStatus] = useState<RobinhoodWsStatus>(() => robinhoodWs.getStatus());
+  const [latestRobinhoodBlock, setLatestRobinhoodBlock] = useState(() => robinhoodWs.getLatestBlock());
 
   useEffect(() => {
     const unsub = subscribeActivities((latest) => {
       setActivities(latest);
     });
-    return unsub;
+    const unsubPositions = subscribeTradePositions((latest) => setPositions(latest));
+    return () => {
+      unsub();
+      unsubPositions();
+    };
   }, []);
 
   useEffect(() => {
-    const unsubStatus = robinhoodWs.subscribeStatus((connected) => {
-      setWsConnected(connected);
-    });
-    const unsubBlock = robinhoodWs.subscribeBlocks((blockNum) => {
-      setLatestBlock(blockNum);
-    });
     const unsubSolStatus = solanaWs.subscribeStatus((connected) => {
       setSolWsConnected(connected);
     });
     const unsubSolSlot = solanaWs.subscribeSlots((slotNum) => {
       setLatestSlot(slotNum);
     });
+    const unsubRobinhoodStatus = robinhoodWs.subscribeStatus(setRobinhoodWsStatus);
+    const unsubRobinhoodBlocks = robinhoodWs.subscribeBlocks((block) => setLatestRobinhoodBlock(block));
     return () => {
-      unsubStatus();
-      unsubBlock();
       unsubSolStatus();
       unsubSolSlot();
+      unsubRobinhoodStatus();
+      unsubRobinhoodBlocks();
     };
   }, []);
 
+  const activeWallets = useMemo(() => {
+    if (selectedSweepIds.size === 0) return undefined;
+    return wallets.filter((wallet) => selectedSweepIds.has(wallet.id));
+  }, [wallets, selectedSweepIds]);
+
   const stats = useMemo(() => {
-    return calculateWinRate(activities, timeframe);
-  }, [activities, timeframe]);
+    return calculateWinRate(activities, timeframe, positions, activeWallets);
+  }, [activities, timeframe, positions, activeWallets]);
 
   const winRateColor = useMemo(() => {
     if (stats.totalTrades === 0) return "var(--ok)";
@@ -51,6 +61,24 @@ export function WinRateCard({ compact = false }: { compact?: boolean }) {
     if (stats.winRate >= 50) return "var(--accent)";
     return "var(--danger)";
   }, [stats]);
+
+  const robinhoodWsConnected = networkSessionReady && !isAirGapped && robinhoodWsStatus === "connected";
+  const robinhoodWsLabel = !robinhoodSelected
+    ? "Robinhood Idle"
+    : isAirGapped || !networkSessionReady
+      ? "Robinhood Offline"
+      : robinhoodWsConnected
+        ? `Robinhood Live${latestRobinhoodBlock ? ` #${latestRobinhoodBlock.number.toLocaleString()}` : ""}`
+        : robinhoodWsStatus === "unconfigured"
+          ? "Robinhood WSS Setup"
+          : robinhoodWsStatus === "error" || robinhoodWsStatus === "disconnected"
+            ? "Robinhood WS Retry"
+            : "Robinhood WS…";
+  const robinhoodWsColor = robinhoodWsConnected
+    ? "#4ade80"
+    : robinhoodWsStatus === "error" || robinhoodWsStatus === "disconnected"
+      ? "#fbbf24"
+      : "var(--text-dim)";
 
   if (compact) {
     return (
@@ -145,26 +173,24 @@ export function WinRateCard({ compact = false }: { compact?: boolean }) {
           <span
             style={{
               fontSize: "11px",
-              color: wsConnected ? "#4ade80" : "var(--text-dim)",
+              color: robinhoodWsColor,
               display: "inline-flex",
               alignItems: "center",
               gap: "5px",
             }}
-            title="Zan.top Dedicated Robinhood RPC Node"
+            title="Robinhood uses a gated ZAN WSS newHeads subscription. Each block triggers a native balance refresh; HTTP fallback resumes only while WSS is unavailable."
           >
             <span
               style={{
                 width: "6px",
                 height: "6px",
                 borderRadius: "50%",
-                background: wsConnected ? "#22c55e" : "#eab308",
-                boxShadow: wsConnected ? "0 0 8px #22c55e" : "none",
+                background: robinhoodWsConnected ? "#22c55e" : robinhoodWsColor,
+                boxShadow: robinhoodWsConnected ? "0 0 8px #22c55e" : "none",
               }}
             />
             <span style={{ fontSize: "10px", fontWeight: 600 }}>
-              {wsConnected
-                ? `Robinhood Live ${latestBlock ? `(#${latestBlock})` : ""}`
-                : "Robinhood WS…"}
+              {robinhoodWsLabel}
             </span>
           </span>
 
@@ -176,7 +202,7 @@ export function WinRateCard({ compact = false }: { compact?: boolean }) {
               alignItems: "center",
               gap: "5px",
             }}
-            title="Helius Dedicated Solana WebSocket RPC"
+            title="Public Solana mainnet WebSocket, gated by native vault-session and Safe Mode checks"
           >
             <span
               style={{

@@ -1,5 +1,4 @@
 import React from 'react';
-import { ContractAddressBadge } from './ContractAddressBadge';
 
 interface FooterProps {
   onOpenWhitepaper: () => void;
@@ -81,9 +80,6 @@ export const Footer: React.FC<FooterProps> = ({ onOpenWhitepaper }) => {
             </div>
           </div>
         </div>
-
-        {/* Official Verified Contract Bar in Footer */}
-        <ContractAddressBadge variant="footer" />
 
         <div className="footer-bottom">
           <div>&copy; {new Date().getFullYear()} Plurivex Labs. All rights reserved. Zero cloud telemetry.</div>

@@ -434,8 +434,7 @@ pub fn derive_bitcoin_addresses_only_native(
     Ok((btc_address, btc_p2sh_address, btc_legacy_address))
 }
 
-/// Zero-RAM-leakage: Derive only public addresses without ever creating private key strings in memory.
-/// Seed buffer is zeroized using volatile writes and memory barriers immediately upon exit.
+/// Derive public addresses without returning private keys across IPC. Selected seed/key buffers use `Zeroizing`; this does not guarantee every temporary copy is cleared.
 pub fn derive_public_addresses_only_native(
     mnemonic_phrase: &str,
 ) -> Result<PublicAddressesOnly, String> {
@@ -530,7 +529,7 @@ pub fn derive_dual_credentials_batch_native(
 }
 
 /// Universal public-only address derivation supporting seed phrase, EVM hex key, and Solana Base58 key.
-/// Zero-RAM-leakage: Private keys are never returned across IPC or allocated as strings in heap.
+/// Return public addresses only; intermediate secret buffers are best-effort and may have copies outside `Zeroizing` control.
 pub fn derive_public_addresses_native(
     secret: &str,
     wallet_type: &str,
